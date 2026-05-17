@@ -1,0 +1,44 @@
+{
+  "name": "@renjfk/opencode-model-fallback",
+  "version": "0.1.0",
+  "description": "Mapped model fallback router for OpenCode. Routes retryable model failures to configured fallback models and recovers after cooldown.",
+  "keywords": [
+    "fallback",
+    "model",
+    "opencode",
+    "plugin",
+    "router"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/renjfk/opencode-model-fallback.git"
+  },
+  "files": [
+    "index.js",
+    "lib"
+  ],
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": {
+      "import": "./index.js"
+    },
+    "./tui": {
+      "import": "./index.js"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "lint": "npx oxlint .",
+    "fmt": "npx oxfmt --check .",
+    "fmt:fix": "npx oxfmt --write .",
+    "check": "npm run test && npm run lint && npm run fmt",
+    "prepack": "npm run check"
+  },
+  "devDependencies": {
+    "oxfmt": "0.50.0",
+    "oxlint": "1.65.0",
+    "vitest": "latest"
+  }
+}
