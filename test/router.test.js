@@ -64,6 +64,100 @@ test("active global cooldown routes mapped models to fallback", async () => {
   });
 });
 
+test("repeated stale UI model only notifies once for the same routed target", async () => {
+  const now = Date.now();
+  mocks.store = createMemoryStore({
+    cooldowns: {
+      [ORIGINAL]: {
+        failedAt: now - 1_000,
+        cooldownUntil: now + 60_000,
+        reason: "rate-limit",
+      },
+    },
+  });
+  const ctx = createContext();
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+    timeout_seconds: 0,
+  });
+
+  await router["chat.message"](
+    { sessionID: "session-1", model: modelObject(ORIGINAL) },
+    { message: { model: modelObject(ORIGINAL) } },
+  );
+  await router["chat.message"](
+    { sessionID: "session-1", model: modelObject(ORIGINAL) },
+    { message: { model: modelObject(ORIGINAL) } },
+  );
+
+  expect(ctx.toasts).toHaveLength(1);
+  expect(ctx.toasts[0]).toMatchObject({
+    title: "Model Fallback",
+    message: `Using ${FALLBACK} instead of ${ORIGINAL}`,
+  });
+});
+
+test("route notifications follow repeated target changes in one session", async () => {
+  const now = Date.now();
+  const cooldowns = {
+    [ORIGINAL]: {
+      failedAt: now - 1_000,
+      cooldownUntil: now + 60_000,
+      reason: "rate-limit",
+    },
+  };
+  mocks.store = createMemoryStore({ cooldowns });
+  const ctx = createContext();
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+    timeout_seconds: 0,
+  });
+
+  await router["chat.message"](
+    { sessionID: "session-1", model: modelObject(ORIGINAL) },
+    { message: { model: modelObject(ORIGINAL) } },
+  );
+  await router["chat.message"](
+    { sessionID: "session-1", model: modelObject(ORIGINAL) },
+    { message: { model: modelObject(ORIGINAL) } },
+  );
+
+  delete cooldowns[ORIGINAL];
+  await router["chat.message"](
+    { sessionID: "session-1", model: modelObject(FALLBACK) },
+    { message: { model: modelObject(FALLBACK) } },
+  );
+  await router["chat.message"](
+    { sessionID: "session-1", model: modelObject(FALLBACK) },
+    { message: { model: modelObject(FALLBACK) } },
+  );
+
+  cooldowns[ORIGINAL] = {
+    failedAt: now + 1_000,
+    cooldownUntil: now + 120_000,
+    reason: "rate-limit",
+  };
+  await router["chat.message"](
+    { sessionID: "session-1", model: modelObject(FALLBACK) },
+    { message: { model: modelObject(FALLBACK) } },
+  );
+
+  expect(ctx.toasts).toEqual([
+    expect.objectContaining({
+      title: "Model Fallback",
+      message: `Using ${FALLBACK} instead of ${ORIGINAL}`,
+    }),
+    expect.objectContaining({
+      title: "Model Recovered",
+      message: `${FALLBACK} -> ${ORIGINAL}`,
+    }),
+    expect.objectContaining({
+      title: "Model Fallback",
+      message: `${ORIGINAL} -> ${FALLBACK}`,
+    }),
+  ]);
+});
+
 test("manual fallback selection switches back to original when cooldown is inactive", async () => {
   const ctx = createContext();
   const router = createMappedFallbackRouter(ctx, {
