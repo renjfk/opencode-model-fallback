@@ -227,7 +227,7 @@ at the local repo path, not the npm package name:
 
 ```json
 {
-  "plugin": ["/Users/your-user/opencode-model-fallback"]
+  "plugin": ["/Users/your-user/opencode-model-fallback/index.js"]
 }
 ```
 
