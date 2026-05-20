@@ -39,6 +39,6 @@
   "devDependencies": {
     "oxfmt": "0.50.0",
     "oxlint": "1.65.0",
-    "vitest": "latest"
+    "vitest": "4.1.6"
   }
 }
