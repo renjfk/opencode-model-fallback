@@ -185,6 +185,29 @@ test("original selection is preserved when cooldown is inactive", async () => {
   expect(output.message.model).toEqual(modelObject(ORIGINAL));
 });
 
+test("manual switches between mapped originals do not show recovery toasts", async () => {
+  const otherOriginal = "openai/gpt-2";
+  const otherFallback = "azure/gpt-2";
+  const ctx = createContext();
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: {
+      [ORIGINAL]: FALLBACK,
+      [otherOriginal]: otherFallback,
+    },
+  });
+
+  await router["chat.message"](
+    { sessionID: "session-1", model: modelObject(ORIGINAL) },
+    { message: { model: modelObject(ORIGINAL) } },
+  );
+  await router["chat.message"](
+    { sessionID: "session-1", model: modelObject(otherOriginal) },
+    { message: { model: modelObject(otherOriginal) } },
+  );
+
+  expect(ctx.toasts).toHaveLength(0);
+});
+
 test("original failure sets global cooldown and replays on fallback", async () => {
   const now = Date.now();
   const ctx = createContext();
