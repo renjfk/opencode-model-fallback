@@ -55,7 +55,6 @@ If you want to set plugin options, use the tuple form:
 - `retry_on_errors`: retryable HTTP status codes. Defaults to `429`.
 - `retryable_error_patterns`: retryable error message patterns. Defaults to `["rate.?limit"]`.
 - `cooldown_seconds`: how long a failed original model remains on fallback. Defaults to `3600`.
-- `timeout_seconds`: abort and retry if a response is inactive for this long. Defaults to `30`.
 - `notify_on_fallback`: show fallback/recovery toasts. Defaults to `true`.
 
 ## How it works

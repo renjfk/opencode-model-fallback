@@ -49,7 +49,6 @@ test("active global cooldown routes mapped models to fallback", async () => {
   const ctx = createContext();
   const router = createMappedFallbackRouter(ctx, {
     mappings: { [ORIGINAL]: FALLBACK },
-    timeout_seconds: 0,
   });
   const output = { message: { model: modelObject(ORIGINAL) } };
 
@@ -78,7 +77,6 @@ test("repeated stale UI model only notifies once for the same routed target", as
   const ctx = createContext();
   const router = createMappedFallbackRouter(ctx, {
     mappings: { [ORIGINAL]: FALLBACK },
-    timeout_seconds: 0,
   });
 
   await router["chat.message"](
@@ -110,7 +108,6 @@ test("route notifications follow repeated target changes in one session", async 
   const ctx = createContext();
   const router = createMappedFallbackRouter(ctx, {
     mappings: { [ORIGINAL]: FALLBACK },
-    timeout_seconds: 0,
   });
 
   await router["chat.message"](
@@ -162,7 +159,6 @@ test("manual fallback selection switches back to original when cooldown is inact
   const ctx = createContext();
   const router = createMappedFallbackRouter(ctx, {
     mappings: { [ORIGINAL]: FALLBACK },
-    timeout_seconds: 0,
   });
   const output = { message: { model: modelObject(FALLBACK) } };
 
@@ -181,7 +177,6 @@ test("original selection is preserved when cooldown is inactive", async () => {
   const ctx = createContext();
   const router = createMappedFallbackRouter(ctx, {
     mappings: { [ORIGINAL]: FALLBACK },
-    timeout_seconds: 0,
   });
   const output = { message: { model: modelObject(ORIGINAL) } };
 
@@ -213,7 +208,6 @@ test("original failure sets global cooldown and replays on fallback", async () =
 
   expect(ctx.prompts[0].body.model).toEqual(modelObject(FALLBACK));
   expect(mocks.store.getModelCooldown(ORIGINAL).cooldownUntil).toBe(now + 3_600_000);
-  expect(vi.getTimerCount()).toBe(0);
 });
 
 test("provider retry status uses tracked original model when event has no model", async () => {

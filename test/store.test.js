@@ -13,11 +13,11 @@ test("state store writes global model cooldowns at the top level", () => {
   try {
     const store = createStateStore(storePath);
     store.setModelCooldown("openai/gpt", "rate-limit", now, now + 60_000);
-    store.setModelCooldown("openai/other", "timeout", now, now + 60_000);
+    store.setModelCooldown("openai/other", "quota", now, now + 60_000);
 
     const written = JSON.parse(readFileSync(storePath, "utf8"));
     expect(written["openai/gpt"].reason).toBe("rate-limit");
-    expect(written["openai/other"].reason).toBe("timeout");
+    expect(written["openai/other"].reason).toBe("quota");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
