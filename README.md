@@ -29,6 +29,15 @@ Add to your OpenCode config at `~/.config/opencode/config.json`:
 }
 ```
 
+### Refresh cached plugin after updates
+
+If OpenCode keeps using an older published version of the plugin after an
+update, clear the cached package and restart OpenCode:
+
+```bash
+rm -rf ~/.cache/opencode/packages/@renjfk/
+```
+
 ## Configuration
 
 If you want to set plugin options, use the tuple form:
