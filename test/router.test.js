@@ -8,7 +8,7 @@ const FALLBACK = "azure/gpt";
 const mocks = vi.hoisted(() => ({
   store: undefined,
   abortSession: vi.fn(),
-  getReplayParts: vi.fn(),
+  getSessionReplay: vi.fn(),
 }));
 
 vi.mock("../lib/store.js", () => ({
@@ -17,7 +17,7 @@ vi.mock("../lib/store.js", () => ({
 
 vi.mock("../lib/session.js", () => ({
   abortSession: mocks.abortSession,
-  getReplayParts: mocks.getReplayParts,
+  getSessionReplay: mocks.getSessionReplay,
 }));
 
 beforeEach(() => {
@@ -25,7 +25,10 @@ beforeEach(() => {
   vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
   mocks.store = createMemoryStore();
   mocks.abortSession.mockResolvedValue(true);
-  mocks.getReplayParts.mockResolvedValue([{ type: "text", text: "hello" }]);
+  mocks.getSessionReplay.mockResolvedValue({
+    parts: [{ type: "text", text: "hello" }],
+    inFlight: false,
+  });
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -230,7 +233,68 @@ test("original failure sets global cooldown and replays on fallback", async () =
   await event;
 
   expect(ctx.prompts[0].body.model).toEqual(modelObject(FALLBACK));
+  expect(ctx.prompts[0].body.parts).toEqual([{ type: "text", text: "hello" }]);
   expect(mocks.store.getModelCooldown(ORIGINAL).cooldownUntil).toBe(now + 3_600_000);
+});
+
+test("in-flight failure sends continue message instead of replaying", async () => {
+  const now = Date.now();
+  mocks.getSessionReplay.mockResolvedValue({
+    parts: [{ type: "text", text: "hello" }],
+    inFlight: true,
+  });
+  const ctx = createContext();
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+    notify_on_fallback: false,
+  });
+
+  const event = router.event({
+    event: {
+      type: "session.error",
+      properties: {
+        sessionID: "session-1",
+        error: { status: 429 },
+        model: ORIGINAL,
+      },
+    },
+  });
+  await vi.advanceTimersByTimeAsync(150);
+  await event;
+
+  expect(ctx.prompts[0].body.model).toEqual(modelObject(FALLBACK));
+  expect(ctx.prompts[0].body.parts).toEqual([
+    { type: "text", text: "Continue from where you left off." },
+  ]);
+  expect(mocks.store.getModelCooldown(ORIGINAL).cooldownUntil).toBe(now + 3_600_000);
+});
+
+test("custom continue message is sent for in-flight failures", async () => {
+  mocks.getSessionReplay.mockResolvedValue({
+    parts: [{ type: "text", text: "hello" }],
+    inFlight: true,
+  });
+  const ctx = createContext();
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+    notify_on_fallback: false,
+    continue_message: "Keep going.",
+  });
+
+  const event = router.event({
+    event: {
+      type: "session.error",
+      properties: {
+        sessionID: "session-1",
+        error: { status: 429 },
+        model: ORIGINAL,
+      },
+    },
+  });
+  await vi.advanceTimersByTimeAsync(150);
+  await event;
+
+  expect(ctx.prompts[0].body.parts).toEqual([{ type: "text", text: "Keep going." }]);
 });
 
 test("provider retry status uses tracked original model when event has no model", async () => {

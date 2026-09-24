@@ -15,9 +15,11 @@ you need is a simple one-to-one fallback inside OpenCode. This plugin handles
 that routing directly in OpenCode.
 
 When a configured model hits a retryable provider failure, this plugin aborts
-the in-flight request, replays the latest user message on the mapped fallback
-model, persists a global cooldown for the failed model, and routes back to the
-original model after the cooldown expires.
+the in-flight request, continues the session on the mapped fallback model (by
+replaying the latest user message, or by sending a continue message when the
+failed run had already made progress), persists a global cooldown for the
+failed model, and routes back to the original model after the cooldown
+expires.
 
 ## Install
 
@@ -65,6 +67,8 @@ If you want to set plugin options, use the tuple form:
 - `retryable_error_patterns`: retryable error message patterns. Defaults to `["rate.?limit"]`.
 - `cooldown_seconds`: how long a failed original model remains on fallback. Defaults to `3600`.
 - `notify_on_fallback`: show fallback/recovery toasts. Defaults to `true`.
+- `continue_message`: message text sent on mid-run fallbacks instead of replaying
+  the latest user message. Defaults to `"Continue from where you left off."`.
 
 ## How it works
 
@@ -99,7 +103,15 @@ to the original model unless the original has an active cooldown.
 
 If OpenCode reports a retryable provider failure such as a rate limit or a
 configured retryable status code, the plugin aborts the current request and
-replays the latest user message on the mapped fallback model.
+continues the session on the mapped fallback model. How the session continues
+depends on whether the failing request had already made progress:
+
+- **Fresh send**: the failure happened before the model produced any output.
+  The latest user message is replayed as-is on the fallback model.
+- **Mid-run**: the failure happened after the model already produced output,
+  for example between tool calls in a loop. Replaying the original user
+  message can confuse the model, so the plugin sends the configurable
+  `continue_message` instead, letting the model pick up where it left off.
 
 For example:
 
