@@ -5,30 +5,10 @@ import { createMappedFallbackRouter } from "../lib/router.js";
 const ORIGINAL = "openai/gpt";
 const FALLBACK = "azure/gpt";
 
-const mocks = vi.hoisted(() => ({
-  store: undefined,
-  abortSession: vi.fn(),
-  getSessionReplay: vi.fn(),
-}));
-
-vi.mock("../lib/store.js", () => ({
-  createStateStore: () => mocks.store,
-}));
-
-vi.mock("../lib/session.js", () => ({
-  abortSession: mocks.abortSession,
-  getSessionReplay: mocks.getSessionReplay,
-}));
-
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-  mocks.store = createMemoryStore();
-  mocks.abortSession.mockResolvedValue(true);
-  mocks.getSessionReplay.mockResolvedValue({
-    parts: [{ type: "text", text: "hello" }],
-    inFlight: false,
-  });
+  vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -40,59 +20,45 @@ afterEach(() => {
 
 test("active global cooldown routes mapped models to fallback", async () => {
   const now = Date.now();
-  mocks.store = createMemoryStore({
-    cooldowns: {
-      [ORIGINAL]: {
-        failedAt: now - 1_000,
-        cooldownUntil: now + 60_000,
-        reason: "rate-limit",
-      },
+  const ctx = createContext(
+    {
+      [cooldownKey(ORIGINAL)]: cooldown(now - 1_000, now + 60_000),
     },
-  });
-  const ctx = createContext();
+    modelRef(ORIGINAL),
+  );
   const router = createMappedFallbackRouter(ctx, {
     mappings: { [ORIGINAL]: FALLBACK },
   });
-  const output = { message: { model: modelObject(ORIGINAL) } };
 
-  await router["chat.message"]({ sessionID: "session-1", model: modelObject(ORIGINAL) }, output);
+  await router.prompt(promptEvent("session-1"));
 
-  expect(output.message.model).toEqual(modelObject(FALLBACK));
-  expect(ctx.toasts[0]).toEqual({
-    title: "Model Fallback",
-    message: `Using ${FALLBACK} instead of ${ORIGINAL}`,
-    variant: "warning",
-    duration: 5000,
+  expect(ctx.session.get).toHaveBeenCalledWith({ sessionID: "session-1" });
+  expect(ctx.session.switchModel).toHaveBeenCalledWith({
+    sessionID: "session-1",
+    model: modelRef(FALLBACK),
   });
+  expect(ctx.warnings()).toEqual([
+    { title: "Model Fallback", message: `Using ${FALLBACK} instead of ${ORIGINAL}` },
+  ]);
 });
 
-test("repeated stale UI model only notifies once for the same routed target", async () => {
+test("repeated prompts only notify once for the same routed target", async () => {
   const now = Date.now();
-  mocks.store = createMemoryStore({
-    cooldowns: {
-      [ORIGINAL]: {
-        failedAt: now - 1_000,
-        cooldownUntil: now + 60_000,
-        reason: "rate-limit",
-      },
+  const ctx = createContext(
+    {
+      [cooldownKey(ORIGINAL)]: cooldown(now - 1_000, now + 60_000),
     },
-  });
-  const ctx = createContext();
+    modelRef(ORIGINAL),
+  );
   const router = createMappedFallbackRouter(ctx, {
     mappings: { [ORIGINAL]: FALLBACK },
   });
 
-  await router["chat.message"](
-    { sessionID: "session-1", model: modelObject(ORIGINAL) },
-    { message: { model: modelObject(ORIGINAL) } },
-  );
-  await router["chat.message"](
-    { sessionID: "session-1", model: modelObject(ORIGINAL) },
-    { message: { model: modelObject(ORIGINAL) } },
-  );
+  await router.prompt(promptEvent("session-1"));
+  await router.prompt(promptEvent("session-1"));
 
-  expect(ctx.toasts).toHaveLength(1);
-  expect(ctx.toasts[0]).toMatchObject({
+  expect(ctx.warnings()).toHaveLength(1);
+  expect(ctx.warnings()[0]).toMatchObject({
     title: "Model Fallback",
     message: `Using ${FALLBACK} instead of ${ORIGINAL}`,
   });
@@ -100,98 +66,66 @@ test("repeated stale UI model only notifies once for the same routed target", as
 
 test("route notifications follow repeated target changes in one session", async () => {
   const now = Date.now();
-  const cooldowns = {
-    [ORIGINAL]: {
-      failedAt: now - 1_000,
-      cooldownUntil: now + 60_000,
-      reason: "rate-limit",
+  const ctx = createContext(
+    {
+      [cooldownKey(ORIGINAL)]: cooldown(now - 1_000, now + 60_000),
     },
-  };
-  mocks.store = createMemoryStore({ cooldowns });
-  const ctx = createContext();
+    modelRef(ORIGINAL),
+  );
   const router = createMappedFallbackRouter(ctx, {
     mappings: { [ORIGINAL]: FALLBACK },
   });
 
-  await router["chat.message"](
-    { sessionID: "session-1", model: modelObject(ORIGINAL) },
-    { message: { model: modelObject(ORIGINAL) } },
-  );
-  await router["chat.message"](
-    { sessionID: "session-1", model: modelObject(ORIGINAL) },
-    { message: { model: modelObject(ORIGINAL) } },
-  );
+  await router.prompt(promptEvent("session-1"));
+  await router.prompt(promptEvent("session-1"));
 
-  delete cooldowns[ORIGINAL];
-  await router["chat.message"](
-    { sessionID: "session-1", model: modelObject(FALLBACK) },
-    { message: { model: modelObject(FALLBACK) } },
-  );
-  await router["chat.message"](
-    { sessionID: "session-1", model: modelObject(FALLBACK) },
-    { message: { model: modelObject(FALLBACK) } },
-  );
+  await ctx.storage.remove(cooldownKey(ORIGINAL));
+  await router.prompt(promptEvent("session-1"));
+  await router.prompt(promptEvent("session-1"));
 
-  cooldowns[ORIGINAL] = {
-    failedAt: now + 1_000,
-    cooldownUntil: now + 120_000,
-    reason: "rate-limit",
-  };
-  await router["chat.message"](
-    { sessionID: "session-1", model: modelObject(FALLBACK) },
-    { message: { model: modelObject(FALLBACK) } },
-  );
+  await ctx.storage.set(cooldownKey(ORIGINAL), cooldown(now + 1_000, now + 120_000));
+  await router.prompt(promptEvent("session-1"));
 
-  expect(ctx.toasts).toEqual([
-    expect.objectContaining({
-      title: "Model Fallback",
-      message: `Using ${FALLBACK} instead of ${ORIGINAL}`,
-    }),
-    expect.objectContaining({
-      title: "Model Recovered",
-      message: `${FALLBACK} -> ${ORIGINAL}`,
-    }),
-    expect.objectContaining({
-      title: "Model Fallback",
-      message: `${ORIGINAL} -> ${FALLBACK}`,
-    }),
+  expect(ctx.warnings()).toEqual([
+    { title: "Model Fallback", message: `Using ${FALLBACK} instead of ${ORIGINAL}` },
+    { title: "Model Recovered", message: `${FALLBACK} -> ${ORIGINAL}` },
+    { title: "Model Fallback", message: `${ORIGINAL} -> ${FALLBACK}` },
   ]);
 });
 
 test("manual fallback selection switches back to original when cooldown is inactive", async () => {
-  const ctx = createContext();
+  const ctx = createContext({}, modelRef(FALLBACK));
   const router = createMappedFallbackRouter(ctx, {
     mappings: { [ORIGINAL]: FALLBACK },
   });
-  const output = { message: { model: modelObject(FALLBACK) } };
 
-  await router["chat.message"]({ sessionID: "session-1", model: modelObject(FALLBACK) }, output);
+  await router.prompt(promptEvent("session-1"));
 
-  expect(output.message.model).toEqual(modelObject(ORIGINAL));
-  expect(ctx.toasts[0]).toEqual({
+  expect(ctx.session.switchModel).toHaveBeenCalledWith({
+    sessionID: "session-1",
+    model: modelRef(ORIGINAL),
+  });
+  expect(ctx.warnings()[0]).toEqual({
     title: "Model Recovered",
     message: `Using ${ORIGINAL} instead of ${FALLBACK}`,
-    variant: "info",
-    duration: 5000,
   });
 });
 
 test("original selection is preserved when cooldown is inactive", async () => {
-  const ctx = createContext();
+  const ctx = createContext({}, modelRef(ORIGINAL));
   const router = createMappedFallbackRouter(ctx, {
     mappings: { [ORIGINAL]: FALLBACK },
   });
-  const output = { message: { model: modelObject(ORIGINAL) } };
 
-  await router["chat.message"]({ sessionID: "session-1", model: modelObject(ORIGINAL) }, output);
+  await router.prompt(promptEvent("session-1"));
 
-  expect(output.message.model).toEqual(modelObject(ORIGINAL));
+  expect(ctx.session.switchModel).not.toHaveBeenCalled();
 });
 
 test("manual switches between mapped originals do not show recovery toasts", async () => {
   const otherOriginal = "openai/gpt-2";
   const otherFallback = "azure/gpt-2";
-  const ctx = createContext();
+  const ctx = createContext({}, modelRef(ORIGINAL));
   const router = createMappedFallbackRouter(ctx, {
     mappings: {
       [ORIGINAL]: FALLBACK,
@@ -199,199 +133,236 @@ test("manual switches between mapped originals do not show recovery toasts", asy
     },
   });
 
-  await router["chat.message"](
-    { sessionID: "session-1", model: modelObject(ORIGINAL) },
-    { message: { model: modelObject(ORIGINAL) } },
-  );
-  await router["chat.message"](
-    { sessionID: "session-1", model: modelObject(otherOriginal) },
-    { message: { model: modelObject(otherOriginal) } },
-  );
+  await router.prompt(promptEvent("session-1"));
+  ctx.sessionModel = modelRef(otherOriginal);
+  await router.prompt(promptEvent("session-1"));
 
-  expect(ctx.toasts).toHaveLength(0);
+  expect(ctx.warnings()).toHaveLength(0);
 });
 
-test("original failure sets global cooldown and replays on fallback", async () => {
+test("original failure sets global cooldown, switches model and forces retry", async () => {
   const now = Date.now();
-  const ctx = createContext();
+  const ctx = createContext({}, modelRef(ORIGINAL));
   const router = createMappedFallbackRouter(ctx, {
     mappings: { [ORIGINAL]: FALLBACK },
     notify_on_fallback: false,
   });
 
-  const event = router.event({
-    event: {
-      type: "session.error",
-      properties: {
-        sessionID: "session-1",
-        error: { status: 429 },
-        model: ORIGINAL,
-      },
-    },
-  });
-  await vi.advanceTimersByTimeAsync(150);
-  await event;
+  const event = retryEvent(ORIGINAL, { status: 429, type: "rate-limit", message: "rate limit" });
+  await router.retry(event);
 
-  expect(ctx.prompts[0].body.model).toEqual(modelObject(FALLBACK));
-  expect(ctx.prompts[0].body.parts).toEqual([{ type: "text", text: "hello" }]);
-  expect(mocks.store.getModelCooldown(ORIGINAL).cooldownUntil).toBe(now + 3_600_000);
+  expect(event.decision).toEqual({ retry: true, delay: 0 });
+  expect(ctx.session.switchModel).toHaveBeenCalledWith({
+    sessionID: "session-1",
+    model: modelRef(FALLBACK),
+  });
+  expect(await ctx.storage.get(cooldownKey(ORIGINAL))).toMatchObject({
+    cooldownUntil: now + 3_600_000,
+  });
 });
 
-test("in-flight failure sends continue message instead of replaying", async () => {
+test("retryable failure with an active cooldown still switches and forces retry without resetting it", async () => {
   const now = Date.now();
-  mocks.getSessionReplay.mockResolvedValue({
-    parts: [{ type: "text", text: "hello" }],
-    inFlight: true,
-  });
-  const ctx = createContext();
+  const existing = cooldown(now - 30_000, now + 60_000);
+  const ctx = createContext(
+    {
+      [cooldownKey(ORIGINAL)]: existing,
+    },
+    modelRef(ORIGINAL),
+  );
   const router = createMappedFallbackRouter(ctx, {
     mappings: { [ORIGINAL]: FALLBACK },
     notify_on_fallback: false,
   });
 
-  const event = router.event({
-    event: {
-      type: "session.error",
-      properties: {
-        sessionID: "session-1",
-        error: { status: 429 },
-        model: ORIGINAL,
-      },
-    },
-  });
-  await vi.advanceTimersByTimeAsync(150);
-  await event;
+  const event = retryEvent(ORIGINAL, { status: 429, type: "rate-limit", message: "rate limit" });
+  await router.retry(event);
 
-  expect(ctx.prompts[0].body.model).toEqual(modelObject(FALLBACK));
-  expect(ctx.prompts[0].body.parts).toEqual([
-    { type: "text", text: "Continue from where you left off." },
+  expect(event.decision).toEqual({ retry: true, delay: 0 });
+  expect(ctx.session.switchModel).toHaveBeenCalledWith({
+    sessionID: "session-1",
+    model: modelRef(FALLBACK),
+  });
+  // The cooldown another session set is kept exactly as it was.
+  expect(await ctx.storage.get(cooldownKey(ORIGINAL))).toEqual(existing);
+});
+
+test("a session on the fallback that fails again does not re-switch or reset the cooldown", async () => {
+  const now = Date.now();
+  const existing = cooldown(now - 30_000, now + 60_000);
+  const ctx = createContext(
+    {
+      [cooldownKey(ORIGINAL)]: existing,
+    },
+    modelRef(FALLBACK),
+  );
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+    notify_on_fallback: false,
+  });
+
+  const event = retryEvent(FALLBACK, { status: 429, type: "rate-limit", message: "rate limit" });
+  await router.retry(event);
+
+  expect(event.decision).toEqual({ retry: false });
+  expect(ctx.session.switchModel).not.toHaveBeenCalled();
+  expect(await ctx.storage.get(cooldownKey(ORIGINAL))).toEqual(existing);
+});
+
+test("fallback failure reports an exhausted fallback without changing the decision", async () => {
+  const ctx = createContext({}, modelRef(FALLBACK));
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+  });
+
+  const event = retryEvent(FALLBACK, { status: 429, type: "rate-limit", message: "rate limit" });
+  await router.retry(event);
+
+  expect(event.decision).toEqual({ retry: false });
+  expect(ctx.session.switchModel).not.toHaveBeenCalled();
+  expect(ctx.warnings()).toEqual([
+    { title: "Model Fallback Exhausted", message: `No mapped fallback left for ${ORIGINAL}` },
   ]);
-  expect(mocks.store.getModelCooldown(ORIGINAL).cooldownUntil).toBe(now + 3_600_000);
-});
-
-test("custom continue message is sent for in-flight failures", async () => {
-  mocks.getSessionReplay.mockResolvedValue({
-    parts: [{ type: "text", text: "hello" }],
-    inFlight: true,
-  });
-  const ctx = createContext();
-  const router = createMappedFallbackRouter(ctx, {
-    mappings: { [ORIGINAL]: FALLBACK },
-    notify_on_fallback: false,
-    continue_message: "Keep going.",
-  });
-
-  const event = router.event({
-    event: {
-      type: "session.error",
-      properties: {
-        sessionID: "session-1",
-        error: { status: 429 },
-        model: ORIGINAL,
-      },
-    },
-  });
-  await vi.advanceTimersByTimeAsync(150);
-  await event;
-
-  expect(ctx.prompts[0].body.parts).toEqual([{ type: "text", text: "Keep going." }]);
-});
-
-test("provider retry status uses tracked original model when event has no model", async () => {
-  const now = Date.now();
-  const ctx = createContext();
-  const router = createMappedFallbackRouter(ctx, {
-    mappings: { [ORIGINAL]: FALLBACK },
-    notify_on_fallback: false,
-  });
-
-  await router["chat.message"](
-    { sessionID: "session-1", model: modelObject(ORIGINAL) },
-    { message: { model: modelObject(ORIGINAL) } },
-  );
-  const event = router.event({
-    event: {
-      type: "session.status",
-      properties: {
-        sessionID: "session-1",
-        status: {
-          type: "retry",
-          attempt: 1,
-          message: "The usage limit has been reached",
-          next: 1000,
-        },
-      },
-    },
-  });
-  await vi.advanceTimersByTimeAsync(150);
-  await event;
-
-  expect(mocks.abortSession).toHaveBeenCalledWith(ctx.client, "session-1");
-  expect(ctx.prompts[0].body.model).toEqual(modelObject(FALLBACK));
-  expect(mocks.store.getModelCooldown(ORIGINAL).cooldownUntil).toBe(now + 3_600_000);
 });
 
 test("non-retryable mapped provider errors do not trigger fallback", async () => {
-  const ctx = createContext();
+  const ctx = createContext({}, modelRef(ORIGINAL));
   const router = createMappedFallbackRouter(ctx, {
     mappings: { [ORIGINAL]: FALLBACK },
     notify_on_fallback: false,
   });
 
-  await router.event({
-    event: {
-      type: "session.error",
-      properties: {
-        sessionID: "session-1",
-        error: { status: 403, message: "usage limit exceeded" },
-        model: ORIGINAL,
-      },
-    },
+  const event = retryEvent(ORIGINAL, {
+    status: 403,
+    type: "provider-error",
+    message: "usage limit exceeded",
   });
+  await router.retry(event);
 
-  expect(ctx.prompts).toHaveLength(0);
-  expect(mocks.store.getModelCooldown(ORIGINAL)).toBeUndefined();
+  expect(event.decision).toEqual({ retry: false });
+  expect(await ctx.storage.get(cooldownKey(ORIGINAL))).toBeUndefined();
 });
 
-function createContext() {
-  const prompts = [];
-  const toasts = [];
-  const ctx = {
-    prompts,
-    toasts,
-    abortCount: 0,
-    directory: "/tmp/project",
-    client: {
-      session: {
-        abort: async () => {
-          ctx.abortCount += 1;
-        },
-        promptAsync: async (request) => {
-          prompts.push(request);
-        },
-      },
-      tui: {
-        showToast: async (request) => {
-          toasts.push(request.body);
-        },
-      },
-    },
-  };
-  return ctx;
+test("setup registers hooks, subscribes to deletions only and cleans up", async () => {
+  const ctx = createContext({}, modelRef(ORIGINAL));
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+  });
+
+  const cleanup = await router.setup();
+
+  expect(ctx.hooks.prompt).toHaveLength(1);
+  expect(ctx.hooks.retry).toHaveLength(1);
+  expect(ctx.subscribeCalls).toBe(1);
+  expect(ctx.subscribeTypes).toEqual(["session.deleted"]);
+
+  await ctx.pushEvent({ type: "session.deleted", data: { sessionID: "session-1" } });
+  await cleanup();
+
+  expect(ctx.disposed).toEqual(["prompt", "retry"]);
+});
+
+function promptEvent(sessionID) {
+  return { sessionID, messageID: "msg-1", prompt: {}, delivery: "user" };
 }
 
-function createMemoryStore({ cooldowns = {} } = {}) {
+function retryEvent(model, error) {
   return {
-    getModelCooldown(model) {
-      return cooldowns[model];
-    },
-    setModelCooldown(model, reason, failedAt, cooldownUntil) {
-      cooldowns[model] = { reason, failedAt, cooldownUntil };
-    },
+    sessionID: "session-1",
+    agent: "build",
+    model: modelRef(model),
+    error,
+    attempt: 1,
+    decision: { retry: false },
   };
 }
 
-function modelObject(model) {
-  const [providerID, modelID] = model.split("/");
-  return { providerID, modelID };
+function cooldown(failedAt, cooldownUntil, reason = "rate-limit") {
+  return { failedAt, cooldownUntil, reason };
+}
+
+function cooldownKey(model) {
+  return `cooldown:${model}`;
+}
+
+function modelRef(model) {
+  const [providerID, id] = model.split("/");
+  return { providerID, id };
+}
+
+function createContext(initial = {}, sessionModel = modelRef(ORIGINAL)) {
+  const data = new Map(Object.entries(initial));
+  const warningLines = [];
+  const hooks = { prompt: [], retry: [] };
+  const disposed = [];
+  const queue = [];
+  const resolvers = [];
+  const ctx = {
+    hooks,
+    disposed,
+    subscribeCalls: 0,
+    subscribeTypes: undefined,
+    sessionModel,
+    storage: {
+      async get(key) {
+        return data.get(key);
+      },
+      async set(key, value) {
+        data.set(key, value);
+      },
+      async remove(key) {
+        data.delete(key);
+      },
+    },
+    session: {
+      get: vi.fn(async ({ sessionID }) => ({ id: sessionID, model: ctx.sessionModel })),
+      switchModel: vi.fn(async () => {}),
+      hook: vi.fn(async (name, callback) => {
+        hooks[name].push(callback);
+        return {
+          async dispose() {
+            disposed.push(name);
+          },
+        };
+      }),
+    },
+    event: {
+      subscribe(options) {
+        ctx.subscribeCalls += 1;
+        ctx.subscribeTypes = options?.types;
+        const signal = options?.signal;
+        return {
+          async *[Symbol.asyncIterator]() {
+            while (!signal?.aborted) {
+              if (queue.length) {
+                yield queue.shift();
+                continue;
+              }
+              const value = await new Promise((resolve) => {
+                resolvers.push(resolve);
+                signal?.addEventListener("abort", () => resolve(undefined), { once: true });
+              });
+              if (value === undefined) return;
+              yield value;
+            }
+          },
+        };
+      },
+    },
+    pushEvent(event) {
+      if (resolvers.length) resolvers.shift()(event);
+      else queue.push(event);
+      return Promise.resolve();
+    },
+    warnings() {
+      return warningLines.map((line) => {
+        const match = /^\[model-fallback\] (.*?): (.*)$/.exec(line);
+        return match ? { title: match[1], message: match[2] } : { title: "", message: line };
+      });
+    },
+  };
+  console.warn.mockImplementation((...args) => {
+    warningLines.push(args.join(" "));
+  });
+  return ctx;
 }

@@ -14,22 +14,24 @@ with a local proxy, but maintaining a proxy server is often not worth it if all
 you need is a simple one-to-one fallback inside OpenCode. This plugin handles
 that routing directly in OpenCode.
 
-When a configured model hits a retryable provider failure, this plugin aborts
-the in-flight request, continues the session on the mapped fallback model (by
-replaying the latest user message, or by sending a continue message when the
-failed run had already made progress), persists a global cooldown for the
-failed model, and routes back to the original model after the cooldown
-expires.
+When a configured model hits a retryable provider failure, this plugin switches
+the session to the mapped fallback model, forces an immediate retry of the failed
+request on that fallback, persists a global cooldown for the failed model, and
+routes back to the original model after the cooldown expires.
 
 ## Install
 
-Add to your OpenCode config at `~/.config/opencode/config.json`:
+Add to your OpenCode V2 config at `~/.config/opencode/opencode.json`:
 
 ```json
 {
-  "plugin": ["@renjfk/opencode-model-fallback"]
+  "plugins": [{ "package": "@renjfk/opencode-model-fallback" }]
 }
 ```
+
+`package` may be an npm package name or an absolute path to a local plugin
+directory (the directory resolves its server entry through `package.json`
+`exports["."]`).
 
 ### Refresh cached plugin after updates
 
@@ -42,20 +44,20 @@ rm -rf ~/.cache/opencode/packages/@renjfk/
 
 ## Configuration
 
-If you want to set plugin options, use the tuple form:
+If you want to set plugin options, add them to the entry:
 
 ```json
 {
-  "plugin": [
-    [
-      "@renjfk/opencode-model-fallback",
-      {
+  "plugins": [
+    {
+      "package": "@renjfk/opencode-model-fallback",
+      "options": {
         "mappings": {
           "openai/gpt-5.4": "azure-ai-foundry/gpt-5.4",
           "openai/gpt-5.5": "azure-ai-foundry/gpt-5.5"
         }
       }
-    ]
+    }
   ]
 }
 ```
@@ -66,26 +68,21 @@ If you want to set plugin options, use the tuple form:
 - `retry_on_errors`: retryable HTTP status codes. Defaults to `429`.
 - `retryable_error_patterns`: retryable error message patterns. Defaults to `["rate.?limit"]`.
 - `cooldown_seconds`: how long a failed original model remains on fallback. Defaults to `3600`.
-- `notify_on_fallback`: show fallback/recovery toasts. Defaults to `true`.
-- `continue_message`: message text sent on mid-run fallbacks instead of replaying
-  the latest user message. Defaults to `"Continue from where you left off."`.
+- `notify_on_fallback`: log fallback/recovery notices. Defaults to `true`.
 
 ## How it works
 
-The plugin watches OpenCode chat and session events. When a request uses a model
-listed in `mappings`, that model is preferred unless it has an active global
-cooldown. If OpenCode reports a retryable provider failure, the plugin switches
-to the mapped fallback model and stores a global cooldown for the failed model.
+The plugin hooks into OpenCode's session prompt and retry flows. When a prompt
+is submitted with a model listed in `mappings`, that model is preferred unless
+it has an active global cooldown; the switch happens before the request is
+built, so the current turn is routed. If OpenCode reports a retryable provider
+failure, the plugin switches to the mapped fallback model, forces an immediate
+retry of the request on it, and stores a global cooldown for the failed model.
 
-Global model cooldowns are persisted at:
-
-```
-~/.local/share/opencode/mapped-fallback-router.json
-```
-
-Persisted cooldowns let all sessions avoid immediately retrying a model that has
-just failed. When the cooldown expires, mapped requests are routed back to the
-original model.
+Global model cooldowns are persisted with OpenCode's plugin storage
+(`ctx.storage`), which is namespaced per plugin. Persisted cooldowns let all
+sessions avoid immediately retrying a model that has just failed. When the
+cooldown expires, mapped requests are routed back to the original model.
 
 The plugin does not load balance, race models, or retry through a chain. Each
 mapping is one original model to one fallback model.
@@ -99,19 +96,15 @@ request goes to `openai/gpt-5.5` normally unless it has an active cooldown.
 If you select the mapped fallback model directly, the plugin still routes back
 to the original model unless the original has an active cooldown.
 
-### Retryable failure while streaming
+### Retryable failure
 
 If OpenCode reports a retryable provider failure such as a rate limit or a
-configured retryable status code, the plugin aborts the current request and
-continues the session on the mapped fallback model. How the session continues
-depends on whether the failing request had already made progress:
-
-- **Fresh send**: the failure happened before the model produced any output.
-  The latest user message is replayed as-is on the fallback model.
-- **Mid-run**: the failure happened after the model already produced output,
-  for example between tool calls in a loop. Replaying the original user
-  message can confuse the model, so the plugin sends the configurable
-  `continue_message` instead, letting the model pick up where it left off.
+configured retryable status code, the plugin switches the session to the mapped
+fallback model and forces an immediate retry, so the failed attempt is replayed
+on the fallback instead of waiting out the provider's retry-after. This applies
+even when the cooldown is already active from another session's failure: the
+cooldown window is kept, but a session still on the original model is switched
+and retried right away.
 
 For example:
 
@@ -143,8 +136,11 @@ When the cooldown expires, mapped requests switch back to the original model.
 ### Exhausted fallback
 
 Mappings are one-to-one. If the fallback model also hits a retryable failure,
-there is no next fallback to try. The plugin shows a fallback exhausted toast
-when notifications are enabled.
+there is no next fallback to try. The plugin logs a fallback exhausted notice
+when notifications are enabled. Route-change notices (`notify_on_fallback`)
+are written to OpenCode's log (the plugin runs in the background service, so
+there is no TUI toast; check `~/.local/share/opencode/log/opencode.log` for
+`[model-fallback]` lines).
 
 ## Troubleshooting Retry Matching
 
@@ -195,17 +191,17 @@ Use the provider `statusCode` and response body text to tune the retry rules:
 
 ```json
 {
-  "plugin": [
-    [
-      "@renjfk/opencode-model-fallback",
-      {
+  "plugins": [
+    {
+      "package": "@renjfk/opencode-model-fallback",
+      "options": {
         "retry_on_errors": [429, 403],
         "retryable_error_patterns": ["rate.?limit", "usage.?limit"],
         "mappings": {
           "openai/gpt-5.5": "azure-ai-foundry/gpt-5.5"
         }
       }
-    ]
+    }
   ]
 }
 ```
@@ -233,21 +229,30 @@ opencode-model-fallback is open to contributions and ideas!
 ### Development
 
 ```bash
-npm run test         # node test suite
+npm run test         # node test suite (unit tests; e2e skipped)
+npm run test:e2e     # full fallback flow against a real `opencode serve`
+                     # with a mock 429 provider (needs opencode on PATH)
 npm run check        # test + lint + fmt
 npm run lint         # oxlint
 npm run fmt          # oxfmt --check
 npm run fmt:fix      # oxfmt --write
 ```
 
+The e2e suite spawns `opencode serve` with an isolated config/data directory,
+a mock OpenAI-compatible provider that answers 429 for the original model and
+streams a reply for the fallback, and asserts the whole chain: the retry hook
+fires, the session switches, the forced retry completes on the fallback, the
+route change is logged, and the cooldown routes later sessions away from the
+original without a single additional request to it.
+
 ### Test local plugin in OpenCode
 
-To test unpublished changes in the OpenCode TUI, point `~/.config/opencode/config.json`
-at the local repo path, not the npm package name:
+To test unpublished changes, point `~/.config/opencode/opencode.json` at the
+local plugin directory, not the npm package name:
 
 ```json
 {
-  "plugin": ["/Users/your-user/opencode-model-fallback/index.js"]
+  "plugins": [{ "package": "/Users/your-user/opencode-model-fallback" }]
 }
 ```
 
