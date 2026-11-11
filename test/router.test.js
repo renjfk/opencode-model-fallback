@@ -595,6 +595,33 @@ test("a retry away-switch recovers the effort statelessly", async () => {
     model: { ...modelRef(ORIGINAL), variant: "high" },
   });
 });
+test("a model renamed by a modelID attribute is routable under its catalog key", async () => {
+  // The config key (mistral-medium-latest) is the selectable reference; the
+  // provider-facing modelID (magistral-medium-latest) differs. The inventory
+  // must be keyed by the catalog id, or availability routing treats the
+  // model as unavailable and silently reroutes it.
+  const ctx = createContext({}, modelRef("leo/mistral-medium-latest"), {
+    availableModels: [],
+  });
+  ctx.model.list.mockResolvedValue({
+    data: [
+      {
+        id: "mistral-medium-latest",
+        modelID: "magistral-medium-latest",
+        providerID: "leo",
+        enabled: true,
+        variants: [{ id: "high" }],
+      },
+    ],
+  });
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { "leo/mistral-medium-latest": FALLBACK },
+  });
+
+  await router.prompt(promptEvent("session-1"));
+  expect(ctx.session.switchModel).not.toHaveBeenCalled();
+});
+
 function promptEvent(sessionID) {
   return { sessionID, messageID: "msg-1", prompt: {}, delivery: "user" };
 }
