@@ -50,13 +50,18 @@ function freePort() {
 // chat completion for everything else. Every request is recorded in order.
 function startMock() {
   const requests = [];
+  // The chain test fails "fallback" on demand, after the 429-on-original tests.
+  const mock = { failFallback: false };
   const server = createServer((req, res) => {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
     req.on("end", () => {
       const parsed = body ? JSON.parse(body) : {};
       const model = parsed.model ?? "";
-      if (req.url.includes("/chat/completions") && model.includes("original")) {
+      if (
+        req.url.includes("/chat/completions") &&
+        (model.includes("original") || (model === "fallback" && mock.failFallback))
+      ) {
         requests.push({ model, status: 429, stream: Boolean(parsed.stream) });
         res.writeHead(429, { "content-type": "application/json" });
         res.end(
@@ -92,7 +97,9 @@ function startMock() {
   });
   return new Promise((resolve, reject) => {
     server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve({ server, requests, port: server.address().port }));
+    server.listen(0, "127.0.0.1", () =>
+      resolve({ server, requests, port: server.address().port, mock }),
+    );
   });
 }
 
@@ -113,6 +120,7 @@ function startOpencode(envRoot, mockPort, apiPort) {
             models: {
               original: { name: "Original", variants: [{ id: "high" }] },
               fallback: { name: "Fallback", variants: [{ id: "high" }] },
+              fallback2: { name: "Fallback 2" },
             },
           },
         },
@@ -120,7 +128,11 @@ function startOpencode(envRoot, mockPort, apiPort) {
           {
             package: repoRoot,
             options: {
-              mappings: { "mock/original": "mock/fallback", "mock/missing": "mock/fallback" },
+              mappings: {
+                "mock/original": "mock/fallback",
+                "mock/missing": "mock/fallback",
+                "mock/fallback": "mock/fallback2",
+              },
               notify_on_fallback: true,
               cooldown_seconds: 3600,
             },
@@ -334,6 +346,29 @@ describe.skipIf(!run)("e2e: fallback against a real opencode server", { timeout:
     expect(await assistantText(state.client, session.id)).toContain("fallback reply");
     const after = await state.client.session.get({ sessionID: session.id });
     expect(after.model).toMatchObject({ providerID: "mock", id: "fallback", variant: "high" });
+  });
+
+  test("a failing fallback advances to the fallback's fallback", async () => {
+    state.mock.mock.failFallback = true;
+    const session = await state.client.session.create({
+      title: "e2e chain",
+      model: { providerID: "mock", id: "original" },
+    });
+    await state.client.session.prompt({ sessionID: session.id, text: "hello chain" });
+    await turnDone(state.client, session.id);
+    state.mock.mock.failFallback = false;
+
+    expect(await assistantText(state.client, session.id)).toContain("fallback reply");
+    const after = await state.client.session.get({ sessionID: session.id });
+    expect(after.model).toMatchObject({ providerID: "mock", id: "fallback2" });
+    expect(
+      state.mock.requests.some((request) => request.model === "fallback" && request.status === 429),
+    ).toBe(true);
+    expect(
+      state.mock.requests.some(
+        (request) => request.model === "fallback2" && request.status === 200,
+      ),
+    ).toBe(true);
   });
 });
 
