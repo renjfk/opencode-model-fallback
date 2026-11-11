@@ -69,6 +69,7 @@ If you want to set plugin options, add them to the entry:
 - `retryable_error_patterns`: retryable error message patterns. Defaults to `["rate.?limit"]`.
 - `cooldown_seconds`: how long a failed original model remains on fallback. Defaults to `3600`.
 - `notify_on_fallback`: log fallback/recovery notices. Defaults to `true`.
+- `route_unavailable`: also route when the selected or agent-pinned original model is unavailable (not in OpenCode's enabled model inventory, e.g. its provider has no credentials on this machine). Defaults to `true`.
 
 ## How it works
 
@@ -132,6 +133,10 @@ cooling down.
 ### Recovery
 
 When the cooldown expires, mapped requests switch back to the original model.
+
+### Unavailable model
+
+With `route_unavailable` (the default), the `prompt` hook also consults OpenCode's enabled model inventory before the request is built. OpenCode resolves an explicitly selected unavailable model to a hard `Model unavailable` error and silently substitutes its default model for an unavailable agent pin - both happen at resolution time, before any provider request exists, so the retry hooks cannot see them. When the requested model is a mapped original that is not in the inventory, the session is switched to its fallback; once the original is available again, the next prompt switches the session back. Sessions without an explicit selection (e.g. subagents running on their agent's pinned model) are covered too: an unavailable mapped original pin is routed away, while a deliberately pinned fallback is respected. An inventory that cannot be read never routes.
 
 ### Exhausted fallback
 
