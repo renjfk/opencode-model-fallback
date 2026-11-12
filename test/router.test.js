@@ -4,6 +4,7 @@ import { createMappedFallbackRouter } from "../lib/router.js";
 
 const ORIGINAL = "openai/gpt";
 const FALLBACK = "azure/gpt";
+const THIRD = "azure/gpt-2";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -221,7 +222,7 @@ test("fallback failure reports an exhausted fallback without changing the decisi
   expect(event.decision).toEqual({ retry: false });
   expect(ctx.session.switchModel).not.toHaveBeenCalled();
   expect(ctx.warnings()).toEqual([
-    { title: "Model Fallback Exhausted", message: `No mapped fallback left for ${ORIGINAL}` },
+    { title: "Model Fallback Exhausted", message: `No mapped fallback left for ${FALLBACK}` },
   ]);
 });
 
@@ -254,12 +255,510 @@ test("setup registers hooks, subscribes to deletions only and cleans up", async 
   expect(ctx.hooks.prompt).toHaveLength(1);
   expect(ctx.hooks.retry).toHaveLength(1);
   expect(ctx.subscribeCalls).toBe(1);
-  expect(ctx.subscribeTypes).toEqual(["session.deleted"]);
+  expect(ctx.subscribeTypes).toEqual(["session.deleted", "provider.updated", "model.updated"]);
 
   await ctx.pushEvent({ type: "session.deleted", data: { sessionID: "session-1" } });
   await cleanup();
 
   expect(ctx.disposed).toEqual(["prompt", "retry"]);
+});
+
+test("unavailable original routes to the fallback without a cooldown", async () => {
+  const ctx = createContext({}, modelRef(ORIGINAL), { availableModels: [FALLBACK] });
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+  });
+
+  await router.prompt(promptEvent("session-1"));
+
+  expect(ctx.session.switchModel).toHaveBeenCalledWith({
+    sessionID: "session-1",
+    model: modelRef(FALLBACK),
+  });
+  expect(ctx.warnings()).toEqual([
+    { title: "Model Fallback", message: `Using ${FALLBACK} instead of ${ORIGINAL}` },
+  ]);
+});
+
+test("session stays on the fallback while the original is unavailable", async () => {
+  const ctx = createContext({}, modelRef(FALLBACK), { availableModels: [FALLBACK] });
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+  });
+
+  await router.prompt(promptEvent("session-1"));
+
+  expect(ctx.session.switchModel).not.toHaveBeenCalled();
+  expect(ctx.warnings()).toEqual([]);
+});
+
+test("session returns to the original once it is available again", async () => {
+  const ctx = createContext({}, modelRef(ORIGINAL), { availableModels: [FALLBACK] });
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+  });
+
+  await router.prompt(promptEvent("session-1"));
+  ctx.availableModels = [ORIGINAL, FALLBACK];
+  ctx.sessionModel = modelRef(FALLBACK);
+  vi.setSystemTime(new Date("2026-01-01T00:00:31.000Z"));
+  await router.prompt(promptEvent("session-1"));
+
+  expect(ctx.session.switchModel).toHaveBeenLastCalledWith({
+    sessionID: "session-1",
+    model: modelRef(ORIGINAL),
+  });
+  expect(ctx.warnings()).toEqual([
+    { title: "Model Fallback", message: `Using ${FALLBACK} instead of ${ORIGINAL}` },
+    { title: "Model Recovered", message: `${FALLBACK} -> ${ORIGINAL}` },
+  ]);
+});
+
+test("provider updates invalidate the availability snapshot", async () => {
+  const ctx = createContext({}, modelRef(ORIGINAL), { availableModels: [FALLBACK] });
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+  });
+  const cleanup = await router.setup();
+
+  await router.prompt(promptEvent("session-1"));
+  ctx.availableModels = [ORIGINAL, FALLBACK];
+  ctx.sessionModel = modelRef(FALLBACK);
+  await ctx.pushEvent({ type: "provider.updated", data: {} });
+  await router.prompt(promptEvent("session-1"));
+
+  expect(ctx.session.switchModel).toHaveBeenLastCalledWith({
+    sessionID: "session-1",
+    model: modelRef(ORIGINAL),
+  });
+  await cleanup();
+});
+
+test("unavailable agent pin routes to the mapped fallback", async () => {
+  const ctx = createContext({}, null, {
+    availableModels: [FALLBACK],
+    agent: { id: "build", model: modelRef(ORIGINAL) },
+  });
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+  });
+
+  await router.prompt(promptEvent("session-1"));
+
+  expect(ctx.agent.get).toHaveBeenCalledWith({ agentID: "build" });
+  expect(ctx.session.switchModel).toHaveBeenCalledWith({
+    sessionID: "session-1",
+    model: modelRef(FALLBACK),
+  });
+});
+
+test("available agent pin is left untouched", async () => {
+  const ctx = createContext({}, null, {
+    agent: { id: "build", model: modelRef(ORIGINAL) },
+  });
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+  });
+
+  await router.prompt(promptEvent("session-1"));
+
+  expect(ctx.session.switchModel).not.toHaveBeenCalled();
+});
+
+test("pinned fallback models are not rerouted to their original", async () => {
+  const ctx = createContext({}, null, {
+    agent: { id: "build", model: modelRef(FALLBACK) },
+  });
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+  });
+
+  await router.prompt(promptEvent("session-1"));
+
+  expect(ctx.session.switchModel).not.toHaveBeenCalled();
+});
+
+test("route_unavailable: false keeps cooldown-only routing", async () => {
+  const ctx = createContext({}, modelRef(ORIGINAL), { availableModels: [FALLBACK] });
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+    route_unavailable: false,
+  });
+
+  await router.prompt(promptEvent("session-1"));
+
+  expect(ctx.model.list).not.toHaveBeenCalled();
+  expect(ctx.session.switchModel).not.toHaveBeenCalled();
+});
+
+test("an untrustworthy model inventory never routes", async () => {
+  const ctx = createContext({}, modelRef(ORIGINAL));
+  ctx.model.list.mockRejectedValue(new Error("inventory unavailable"));
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+  });
+
+  await router.prompt(promptEvent("session-1"));
+
+  expect(ctx.session.switchModel).not.toHaveBeenCalled();
+});
+
+test("fallback keeps the reasoning effort when the target supports it", async () => {
+  const now = Date.now();
+  const ctx = createContext(
+    { [cooldownKey(ORIGINAL)]: cooldown(now - 1_000, now + 60_000) },
+    { ...modelRef(ORIGINAL), variant: "high" },
+    { availableModels: [`${ORIGINAL}|high`, `${FALLBACK}|high`] },
+  );
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+  });
+
+  await router.prompt(promptEvent("session-1"));
+
+  expect(ctx.session.switchModel).toHaveBeenCalledWith({
+    sessionID: "session-1",
+    model: { ...modelRef(FALLBACK), variant: "high" },
+  });
+});
+
+test("fallback drops the reasoning effort when the target does not support it", async () => {
+  const now = Date.now();
+  const ctx = createContext(
+    { [cooldownKey(ORIGINAL)]: cooldown(now - 1_000, now + 60_000) },
+    { ...modelRef(ORIGINAL), variant: "high" },
+    { availableModels: [`${ORIGINAL}|high`, FALLBACK] },
+  );
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+  });
+
+  await router.prompt(promptEvent("session-1"));
+
+  expect(ctx.session.switchModel).toHaveBeenCalledWith({
+    sessionID: "session-1",
+    model: modelRef(FALLBACK),
+  });
+});
+
+test("an explicit variant in the mapping value wins over matching", async () => {
+  const now = Date.now();
+  const ctx = createContext(
+    { [cooldownKey(ORIGINAL)]: cooldown(now - 1_000, now + 60_000) },
+    modelRef(ORIGINAL),
+    { availableModels: [ORIGINAL, FALLBACK] },
+  );
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: `${FALLBACK}#high` },
+  });
+
+  await router.prompt(promptEvent("session-1"));
+
+  expect(ctx.session.switchModel).toHaveBeenCalledWith({
+    sessionID: "session-1",
+    model: { ...modelRef(FALLBACK), variant: "high" },
+  });
+});
+
+test("recovery restores the reasoning effort", async () => {
+  const ctx = createContext(
+    {},
+    { ...modelRef(FALLBACK), variant: "high" },
+    { availableModels: [`${ORIGINAL}|high`, `${FALLBACK}|high`] },
+  );
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+  });
+
+  await router.prompt(promptEvent("session-1"));
+
+  expect(ctx.session.switchModel).toHaveBeenCalledWith({
+    sessionID: "session-1",
+    model: { ...modelRef(ORIGINAL), variant: "high" },
+  });
+});
+
+test("retry preserves the reasoning effort on the fallback", async () => {
+  const ctx = createContext({}, modelRef(ORIGINAL), {
+    availableModels: [`${ORIGINAL}|high`, `${FALLBACK}|high`],
+  });
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+    notify_on_fallback: false,
+  });
+
+  const event = retryEvent(ORIGINAL, { status: 429, type: "rate-limit", message: "rate limit" });
+  event.model = { ...event.model, variant: "high" };
+  await router.retry(event);
+
+  expect(ctx.session.switchModel).toHaveBeenCalledWith({
+    sessionID: "session-1",
+    model: { ...modelRef(FALLBACK), variant: "high" },
+  });
+});
+
+test("the default variant is not carried over to the target", async () => {
+  const now = Date.now();
+  const ctx = createContext(
+    { [cooldownKey(ORIGINAL)]: cooldown(now - 1_000, now + 60_000) },
+    { ...modelRef(ORIGINAL), variant: "default" },
+    { availableModels: [`${ORIGINAL}|high`, `${FALLBACK}|high`] },
+  );
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+  });
+
+  await router.prompt(promptEvent("session-1"));
+
+  expect(ctx.session.switchModel).toHaveBeenCalledWith({
+    sessionID: "session-1",
+    model: modelRef(FALLBACK),
+  });
+});
+
+test("recovery restores the effort from the agent pin", async () => {
+  const now = Date.now();
+  const ctx = createContext(
+    { [cooldownKey(ORIGINAL)]: cooldown(now - 1_000, now + 60_000) },
+    { ...modelRef(ORIGINAL), variant: "high" },
+    {
+      availableModels: [`${ORIGINAL}|high`, FALLBACK],
+      agent: { id: "build", model: { ...modelRef(ORIGINAL), variant: "high" } },
+    },
+  );
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+  });
+
+  await router.prompt(promptEvent("session-1"));
+  expect(ctx.session.switchModel).toHaveBeenLastCalledWith({
+    sessionID: "session-1",
+    model: modelRef(FALLBACK),
+  });
+
+  await ctx.storage.remove(cooldownKey(ORIGINAL));
+  ctx.sessionModel = modelRef(FALLBACK);
+  await router.prompt(promptEvent("session-1"));
+  expect(ctx.session.switchModel).toHaveBeenLastCalledWith({
+    sessionID: "session-1",
+    model: { ...modelRef(ORIGINAL), variant: "high" },
+  });
+});
+
+test("recovery restores the effort from the original's last recorded response", async () => {
+  const now = Date.now();
+  const ctx = createContext(
+    { [cooldownKey(ORIGINAL)]: cooldown(now - 1_000, now + 60_000) },
+    { ...modelRef(ORIGINAL), variant: "high" },
+    {
+      availableModels: [`${ORIGINAL}|high`, FALLBACK],
+      messages: [{ type: "assistant", model: { ...modelRef(ORIGINAL), variant: "high" } }],
+    },
+  );
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+  });
+
+  await router.prompt(promptEvent("session-1"));
+  await ctx.storage.remove(cooldownKey(ORIGINAL));
+  ctx.sessionModel = modelRef(FALLBACK);
+  await router.prompt(promptEvent("session-1"));
+  expect(ctx.session.switchModel).toHaveBeenLastCalledWith({
+    sessionID: "session-1",
+    model: { ...modelRef(ORIGINAL), variant: "high" },
+  });
+  expect(ctx.session.context).toHaveBeenCalledWith({ sessionID: "session-1" });
+});
+
+test("a retry away-switch recovers the effort statelessly", async () => {
+  const ctx = createContext({}, modelRef(ORIGINAL), {
+    availableModels: [`${ORIGINAL}|high`, FALLBACK],
+    messages: [{ type: "assistant", model: { ...modelRef(ORIGINAL), variant: "high" } }],
+  });
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK },
+    notify_on_fallback: false,
+  });
+
+  const event = retryEvent(ORIGINAL, { status: 429, type: "rate-limit", message: "rate limit" });
+  event.model = { ...event.model, variant: "high" };
+  await router.retry(event);
+  expect(ctx.session.switchModel).toHaveBeenLastCalledWith({
+    sessionID: "session-1",
+    model: modelRef(FALLBACK),
+  });
+
+  await ctx.storage.remove(cooldownKey(ORIGINAL));
+  ctx.sessionModel = modelRef(FALLBACK);
+  await router.prompt(promptEvent("session-1"));
+  expect(ctx.session.switchModel).toHaveBeenLastCalledWith({
+    sessionID: "session-1",
+    model: { ...modelRef(ORIGINAL), variant: "high" },
+  });
+});
+test("a model renamed by a modelID attribute is routable under its catalog key", async () => {
+  // The config key (mistral-medium-latest) is the selectable reference; the
+  // provider-facing modelID (magistral-medium-latest) differs. The inventory
+  // must be keyed by the catalog id, or availability routing treats the
+  // model as unavailable and silently reroutes it.
+  const ctx = createContext({}, modelRef("leo/mistral-medium-latest"), {
+    availableModels: [],
+  });
+  ctx.model.list.mockResolvedValue({
+    data: [
+      {
+        id: "mistral-medium-latest",
+        modelID: "magistral-medium-latest",
+        providerID: "leo",
+        enabled: true,
+        variants: [{ id: "high" }],
+      },
+    ],
+  });
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { "leo/mistral-medium-latest": FALLBACK },
+  });
+
+  await router.prompt(promptEvent("session-1"));
+  expect(ctx.session.switchModel).not.toHaveBeenCalled();
+});
+
+test("a failing fallback advances to the fallback's fallback", async () => {
+  const ctx = createContext({}, modelRef(FALLBACK));
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK, [FALLBACK]: THIRD },
+    notify_on_fallback: false,
+  });
+
+  const event = retryEvent(FALLBACK, { status: 429, type: "rate-limit", message: "rate limit" });
+  await router.retry(event);
+
+  expect(event.decision).toEqual({ retry: true, delay: 0 });
+  expect(ctx.session.switchModel).toHaveBeenCalledWith({
+    sessionID: "session-1",
+    model: modelRef(THIRD),
+  });
+  expect(await ctx.storage.get(cooldownKey(FALLBACK))).toMatchObject({ reason: "rate-limit" });
+});
+
+test("the failure walk skips cooldown members", async () => {
+  const now = Date.now();
+  const ctx = createContext(
+    {
+      [cooldownKey(ORIGINAL)]: cooldown(now - 1_000, now + 60_000),
+      [cooldownKey(FALLBACK)]: cooldown(now - 1_000, now + 60_000),
+    },
+    modelRef(ORIGINAL),
+  );
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK, [FALLBACK]: THIRD },
+    notify_on_fallback: false,
+  });
+
+  const event = retryEvent(ORIGINAL, { status: 429, type: "rate-limit", message: "rate limit" });
+  await router.retry(event);
+
+  expect(event.decision).toEqual({ retry: true, delay: 0 });
+  expect(ctx.session.switchModel).toHaveBeenCalledWith({
+    sessionID: "session-1",
+    model: modelRef(THIRD),
+  });
+});
+
+test("the failure walk skips unavailable members", async () => {
+  const ctx = createContext({}, modelRef(ORIGINAL), {
+    availableModels: [ORIGINAL, THIRD],
+  });
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK, [FALLBACK]: THIRD },
+    notify_on_fallback: false,
+  });
+
+  const event = retryEvent(ORIGINAL, { status: 429, type: "rate-limit", message: "rate limit" });
+  await router.retry(event);
+
+  expect(event.decision).toEqual({ retry: true, delay: 0 });
+  expect(ctx.session.switchModel).toHaveBeenCalledWith({
+    sessionID: "session-1",
+    model: modelRef(THIRD),
+  });
+});
+
+test("a configured cycle truncates instead of ping-ponging", async () => {
+  const now = Date.now();
+  const ctx = createContext(
+    {
+      [cooldownKey(ORIGINAL)]: cooldown(now - 1_000, now + 60_000),
+      [cooldownKey(FALLBACK)]: cooldown(now - 1_000, now + 60_000),
+    },
+    modelRef(FALLBACK),
+  );
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK, [FALLBACK]: ORIGINAL },
+    notify_on_fallback: false,
+  });
+
+  const event = retryEvent(FALLBACK, { status: 429, type: "rate-limit", message: "rate limit" });
+  await router.retry(event);
+
+  expect(event.decision).toEqual({ retry: false });
+  expect(ctx.session.switchModel).not.toHaveBeenCalled();
+});
+
+test("prompt routing walks the chain past cooldown members", async () => {
+  const now = Date.now();
+  const ctx = createContext(
+    {
+      [cooldownKey(ORIGINAL)]: cooldown(now - 1_000, now + 60_000),
+      [cooldownKey(FALLBACK)]: cooldown(now - 1_000, now + 60_000),
+    },
+    modelRef(ORIGINAL),
+  );
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK, [FALLBACK]: THIRD },
+  });
+
+  await router.prompt(promptEvent("session-1"));
+
+  expect(ctx.session.switchModel).toHaveBeenCalledWith({
+    sessionID: "session-1",
+    model: modelRef(THIRD),
+  });
+});
+
+test("recovery steps back one level at a time through the chain", async () => {
+  const ctx = createContext({}, modelRef(THIRD), {
+    messages: [{ type: "assistant", model: modelRef(ORIGINAL) }],
+  });
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK, [FALLBACK]: THIRD },
+  });
+
+  await router.prompt(promptEvent("session-1"));
+  expect(ctx.session.switchModel).toHaveBeenLastCalledWith({
+    sessionID: "session-1",
+    model: modelRef(FALLBACK),
+  });
+
+  ctx.sessionModel = modelRef(FALLBACK);
+  await router.prompt(promptEvent("session-1"));
+  expect(ctx.session.switchModel).toHaveBeenLastCalledWith({
+    sessionID: "session-1",
+    model: modelRef(ORIGINAL),
+  });
+});
+
+test("a pinned chain member is not yanked to its root without history", async () => {
+  const ctx = createContext({}, modelRef(FALLBACK), {
+    messages: [{ type: "assistant", model: modelRef(FALLBACK) }],
+  });
+  const router = createMappedFallbackRouter(ctx, {
+    mappings: { [ORIGINAL]: FALLBACK, [FALLBACK]: THIRD },
+  });
+
+  await router.prompt(promptEvent("session-1"));
+
+  expect(ctx.session.switchModel).not.toHaveBeenCalled();
 });
 
 function promptEvent(sessionID) {
@@ -290,7 +789,7 @@ function modelRef(model) {
   return { providerID, id };
 }
 
-function createContext(initial = {}, sessionModel = modelRef(ORIGINAL)) {
+function createContext(initial = {}, sessionModel = modelRef(ORIGINAL), overrides = {}) {
   const data = new Map(Object.entries(initial));
   const warningLines = [];
   const hooks = { prompt: [], retry: [] };
@@ -303,6 +802,34 @@ function createContext(initial = {}, sessionModel = modelRef(ORIGINAL)) {
     subscribeCalls: 0,
     subscribeTypes: undefined,
     sessionModel,
+    agentID: overrides.agentID ?? "build",
+    messages: overrides.messages ?? [],
+    availableModels: overrides.availableModels ?? [
+      ORIGINAL,
+      FALLBACK,
+      "openai/gpt-2",
+      "azure/gpt-2",
+    ],
+    model: {
+      list: vi.fn(async () => ({
+        data: ctx.availableModels.map((entry) => {
+          const [name, variants] = entry.split("|");
+          const [providerID, modelID] = name.split("/");
+          return {
+            providerID,
+            modelID,
+            enabled: true,
+            variants: (variants ?? "")
+              .split(",")
+              .filter(Boolean)
+              .map((id) => ({ id })),
+          };
+        }),
+      })),
+    },
+    agent: {
+      get: vi.fn(async ({ agentID }) => overrides.agent ?? { id: agentID }),
+    },
     storage: {
       async get(key) {
         return data.get(key);
@@ -315,8 +842,13 @@ function createContext(initial = {}, sessionModel = modelRef(ORIGINAL)) {
       },
     },
     session: {
-      get: vi.fn(async ({ sessionID }) => ({ id: sessionID, model: ctx.sessionModel })),
+      get: vi.fn(async ({ sessionID }) => ({
+        id: sessionID,
+        model: ctx.sessionModel,
+        agent: ctx.agentID,
+      })),
       switchModel: vi.fn(async () => {}),
+      context: vi.fn(async () => ctx.messages),
       hook: vi.fn(async (name, callback) => {
         hooks[name].push(callback);
         return {

@@ -15,9 +15,9 @@ you need is a simple one-to-one fallback inside OpenCode. This plugin handles
 that routing directly in OpenCode.
 
 When a configured model hits a retryable provider failure, this plugin switches
-the session to the mapped fallback model, forces an immediate retry of the failed
-request on that fallback, persists a global cooldown for the failed model, and
-routes back to the original model after the cooldown expires.
+the session to the next healthy model in its fallback chain, forces an immediate
+retry of the failed request there, persists a global cooldown for the failed
+model, and steps back up the chain as cooldowns expire.
 
 ## Install
 
@@ -69,6 +69,7 @@ If you want to set plugin options, add them to the entry:
 - `retryable_error_patterns`: retryable error message patterns. Defaults to `["rate.?limit"]`.
 - `cooldown_seconds`: how long a failed original model remains on fallback. Defaults to `3600`.
 - `notify_on_fallback`: log fallback/recovery notices. Defaults to `true`.
+- `route_unavailable`: also route when the selected or agent-pinned original model is unavailable (not in OpenCode's enabled model inventory, e.g. its provider has no credentials on this machine). Defaults to `true`.
 
 ## How it works
 
@@ -76,16 +77,18 @@ The plugin hooks into OpenCode's session prompt and retry flows. When a prompt
 is submitted with a model listed in `mappings`, that model is preferred unless
 it has an active global cooldown; the switch happens before the request is
 built, so the current turn is routed. If OpenCode reports a retryable provider
-failure, the plugin switches to the mapped fallback model, forces an immediate
-retry of the request on it, and stores a global cooldown for the failed model.
+failure, the plugin switches to the next healthy chain member, forces an
+immediate retry of the request on it, and stores a global cooldown for the
+failed model.
 
 Global model cooldowns are persisted with OpenCode's plugin storage
 (`ctx.storage`), which is namespaced per plugin. Persisted cooldowns let all
-sessions avoid immediately retrying a model that has just failed. When the
-cooldown expires, mapped requests are routed back to the original model.
+sessions avoid immediately retrying a model that has just failed. When
+cooldowns expire, sessions step back up the chain one level per prompt.
 
-The plugin does not load balance, race models, or retry through a chain. Each
-mapping is one original model to one fallback model.
+Each mapping is one original model to one fallback model; chains emerge from
+composition (a/gpt -> b/gpt -> c/gpt) and are followed transitively. The plugin
+does not load balance or race models.
 
 ## Scenarios
 
@@ -94,14 +97,16 @@ mapping is one original model to one fallback model.
 If you send a message with `openai/gpt-5.5` and the model has a mapping, the
 request goes to `openai/gpt-5.5` normally unless it has an active cooldown.
 If you select the mapped fallback model directly, the plugin still routes back
-to the original model unless the original has an active cooldown.
+to the original model unless the original has an active cooldown (a chain
+member that is itself a mapping key is respected as its own root - see
+Chained fallbacks).
 
 ### Retryable failure
 
 If OpenCode reports a retryable provider failure such as a rate limit or a
-configured retryable status code, the plugin switches the session to the mapped
-fallback model and forces an immediate retry, so the failed attempt is replayed
-on the fallback instead of waiting out the provider's retry-after. This applies
+configured retryable status code, the plugin switches the session to the next
+healthy chain member and forces an immediate retry, so the failed attempt is
+replayed there instead of waiting out the provider's retry-after. This applies
 even when the cooldown is already active from another session's failure: the
 cooldown window is kept, but a session still on the original model is switched
 and retried right away.
@@ -122,22 +127,36 @@ If `openai/gpt-5.5` fails with a retryable error, the session continues on
 ### Active cooldown
 
 After fallback is triggered, the original model is considered cooling down for
-`cooldown_seconds`. During that cooldown, mapped requests use the fallback model
-instead of switching back and immediately hitting the same provider
-failure again.
+`cooldown_seconds`. During that cooldown, mapped requests use the next healthy
+chain member instead of switching back and immediately hitting the same
+provider failure again.
 
-All sessions are routed straight to the fallback while the original model is
-cooling down.
+All sessions are routed past it to the next healthy chain member while the
+original model is cooling down.
 
 ### Recovery
 
-When the cooldown expires, mapped requests switch back to the original model.
+When cooldowns expire, sessions step back up the chain one level per prompt
+(see Chained fallbacks).
+
+### Unavailable model
+
+With `route_unavailable` (the default), the `prompt` hook also consults OpenCode's enabled model inventory before the request is built. OpenCode resolves an explicitly selected unavailable model to a hard `Model unavailable` error and silently substitutes its default model for an unavailable agent pin - both happen at resolution time, before any provider request exists, so the retry hooks cannot see them. When the requested model is a mapped original that is not in the inventory, the session is switched to the first available chain member; once the original is available again, the next prompt switches the session back. Sessions without an explicit selection (e.g. subagents running on their agent's pinned model) are covered too: an unavailable mapped original pin is routed away, while a deliberately pinned fallback is respected. An inventory that cannot be read never routes. A provider that vanishes mid-turn cannot be saved: the agentic loop builds a new request after each tool result without a prompt, and core resolves the unavailable model to a terminal error before any plugin hook can reroute it - the turn fails visibly and the next prompt recovers automatically.
+
+### Reasoning effort
+
+Switches keep the session's reasoning effort. When the target model lists the session's current variant (e.g. `high`) in its catalog, the session is switched with that variant; an unsupported effort falls back to the target's default, as before. A mapping value may pin the effort explicitly (`"openai/gpt-5.5": "azure/gpt-5.5#high"`), which always wins over matching; mapping keys are variant-less. Recovery applies the same rule, so `original#high -> fallback#high -> original#high` round-trips while both models support the effort. When the fallback drops the effort (e.g. a non-reasoning fallback), recovery restores it without plugin-side state - from the session agent's pinned model when it points at the original, else from the original's last recorded response - so it survives plugin restarts.
+
+### Chained fallbacks
+
+Chains are the transitive composition of the one-to-one mappings: `{ "a/gpt": "b/gpt", "b/gpt": "c/gpt" }` routes `a/gpt` through `b/gpt` to `c/gpt`. A retryable failure switches the session to the first chain member that can serve the request - members in a global cooldown or missing from the enabled model inventory are skipped, which also breaks configured cycles (a cycle truncates at the first repeat). Prompt-time routing walks the same chain. Recovery steps back one level per prompt: a session that walked `a/gpt -> b/gpt -> c/gpt` returns to `b/gpt` once it is healthy again, and a chain member that is itself a mapping key continues to its upstream root when the session's recorded responses show it actually arrived from there - a deliberately pinned chain member is never yanked.
 
 ### Exhausted fallback
 
-Mappings are one-to-one. If the fallback model also hits a retryable failure,
-there is no next fallback to try. The plugin logs a fallback exhausted notice
-when notifications are enabled. Route-change notices (`notify_on_fallback`)
+Exhausted means no healthy member is left in the failed model's chain: every
+following member is either in a global cooldown or missing from OpenCode's enabled
+model inventory. The plugin logs a fallback exhausted notice when notifications
+are enabled. Route-change notices (`notify_on_fallback`)
 are written to OpenCode's log (the plugin runs in the background service, so
 there is no TUI toast; check `~/.local/share/opencode/log/opencode.log` for
 `[model-fallback]` lines).

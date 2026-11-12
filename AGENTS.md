@@ -13,10 +13,12 @@ with logic split into `lib/`.
 - Single default export: `Plugin.define({ id, setup })`. `createMappedFallbackRouter(ctx, options)`
   receives the V2 plugin context; `ctx.options` holds the plugin options.
 - Fallback mappings are one-to-one: one original model maps to one fallback
-  model.
+  model. Chains are the transitive composition of mappings and are followed
+  transitively; a configured cycle truncates at the first repeat.
 - A retryable failure is handled by the V2 session `retry` hook: set the global
-  cooldown (unless one is already active), switch the session to the fallback
-  model (`ctx.session.switchModel`), and force `event.decision = { retry: true }`.
+  cooldown (unless one is already active), switch the session to the next
+  healthy chain member (`ctx.session.switchModel`), and force
+  `event.decision = { retry: true }`.
   Routing at prompt time happens through the session `prompt` hook: the
   `context` hook's `model` field is readonly and core ignores writes to it, so
   the switch must happen before the request is built.
