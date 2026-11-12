@@ -111,8 +111,8 @@ function startOpencode(envRoot, mockPort, apiPort) {
             package: "aisdk:@ai-sdk/openai-compatible",
             settings: { baseURL: `http://127.0.0.1:${mockPort}/v1`, apiKey: "dummy" },
             models: {
-              original: { name: "Original" },
-              fallback: { name: "Fallback" },
+              original: { name: "Original", variants: [{ id: "high" }] },
+              fallback: { name: "Fallback", variants: [{ id: "high" }] },
             },
           },
         },
@@ -120,7 +120,7 @@ function startOpencode(envRoot, mockPort, apiPort) {
           {
             package: repoRoot,
             options: {
-              mappings: { "mock/original": "mock/fallback" },
+              mappings: { "mock/original": "mock/fallback", "mock/missing": "mock/fallback" },
               notify_on_fallback: true,
               cooldown_seconds: 3600,
             },
@@ -297,6 +297,43 @@ describe.skipIf(!run)("e2e: fallback against a real opencode server", { timeout:
       request.model?.includes("original"),
     ).length;
     expect(originalCallsAfter).toBe(originalCallsBefore);
+  });
+
+  test("an unavailable model routes to the fallback before the request is built", async () => {
+    // mock/missing is mapped but not declared in the mock provider's model
+    // list, so it never enters OpenCode's enabled inventory. Without routing,
+    // the turn dies with a hard "Model unavailable" resolution error.
+    const session = await state.client.session.create({
+      title: "e2e unavailable",
+      model: { providerID: "mock", id: "missing" },
+    });
+    await state.client.session.prompt({ sessionID: session.id, text: "hello missing" });
+    await turnDone(state.client, session.id);
+
+    expect(await assistantText(state.client, session.id)).toContain("fallback reply");
+    const after = await state.client.session.get({ sessionID: session.id });
+    expect(after.model).toMatchObject({ providerID: "mock", id: "fallback" });
+
+    // The unavailable model never reached the provider.
+    expect(state.mock.requests.some((request) => request.model?.includes("missing"))).toBe(false);
+    expect(
+      state.mock.requests.some(
+        (request) => request.model?.includes("fallback") && request.status === 200,
+      ),
+    ).toBe(true);
+  });
+
+  test("a routed fallback keeps the session's reasoning effort when the target supports it", async () => {
+    const session = await state.client.session.create({
+      title: "e2e effort",
+      model: { providerID: "mock", id: "original", variant: "high" },
+    });
+    await state.client.session.prompt({ sessionID: session.id, text: "hello effort" });
+    await turnDone(state.client, session.id);
+
+    expect(await assistantText(state.client, session.id)).toContain("fallback reply");
+    const after = await state.client.session.get({ sessionID: session.id });
+    expect(after.model).toMatchObject({ providerID: "mock", id: "fallback", variant: "high" });
   });
 });
 

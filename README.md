@@ -69,6 +69,7 @@ If you want to set plugin options, add them to the entry:
 - `retryable_error_patterns`: retryable error message patterns. Defaults to `["rate.?limit"]`.
 - `cooldown_seconds`: how long a failed original model remains on fallback. Defaults to `3600`.
 - `notify_on_fallback`: log fallback/recovery notices. Defaults to `true`.
+- `route_unavailable`: also route when the selected or agent-pinned original model is unavailable (not in OpenCode's enabled model inventory, e.g. its provider has no credentials on this machine). Defaults to `true`.
 
 ## How it works
 
@@ -132,6 +133,14 @@ cooling down.
 ### Recovery
 
 When the cooldown expires, mapped requests switch back to the original model.
+
+### Unavailable model
+
+With `route_unavailable` (the default), the `prompt` hook also consults OpenCode's enabled model inventory before the request is built. OpenCode resolves an explicitly selected unavailable model to a hard `Model unavailable` error and silently substitutes its default model for an unavailable agent pin - both happen at resolution time, before any provider request exists, so the retry hooks cannot see them. When the requested model is a mapped original that is not in the inventory, the session is switched to its fallback; once the original is available again, the next prompt switches the session back. Sessions without an explicit selection (e.g. subagents running on their agent's pinned model) are covered too: an unavailable mapped original pin is routed away, while a deliberately pinned fallback is respected. An inventory that cannot be read never routes. A provider that vanishes mid-turn cannot be saved: the agentic loop builds a new request after each tool result without a prompt, and core resolves the unavailable model to a terminal error before any plugin hook can reroute it - the turn fails visibly and the next prompt recovers automatically.
+
+### Reasoning effort
+
+Switches keep the session's reasoning effort. When the target model lists the session's current variant (e.g. `high`) in its catalog, the session is switched with that variant; an unsupported effort falls back to the target's default, as before. A mapping value may pin the effort explicitly (`"openai/gpt-5.5": "azure/gpt-5.5#high"`), which always wins over matching; mapping keys are variant-less. Recovery applies the same rule, so `original#high -> fallback#high -> original#high` round-trips while both models support the effort. When the fallback drops the effort (e.g. a non-reasoning fallback), recovery restores it without plugin-side state - from the session agent's pinned model when it points at the original, else from the original's last recorded response - so it survives plugin restarts.
 
 ### Exhausted fallback
 
