@@ -24,7 +24,7 @@ routes back to the original model after the cooldown expires.
 Install with OpenCode V2's plugin manager:
 
 ```bash
-opencode plugin add @kingychiu/opencode-model-fallback@1.4.0
+opencode plugin add @kingychiu/opencode-model-fallback@1.5.0
 ```
 
 This adds the package to `~/.config/opencode/opencode.json` or `opencode.jsonc`.
@@ -79,12 +79,15 @@ hidden for unused and currently recent models. Activity is kept in server memory
 when the OpenCode service restarts; configured model cooldowns remain persisted
 through plugin storage.
 
-Run `/fallback-config` to edit complete routes using model pickers. You can add,
-replace, reorder, or remove models by priority, explicitly toggle circular retry,
-create independent routes, and delete routes with confirmation. Destructive
-actions show the resulting model sequence before saving. Press Escape to close
-the configuration dialog. The editor updates only this plugin's options in the
-global `opencode.json(c)` and preserves unrelated settings and comments.
+Run `/fallback-config` to open the global `opencode.json(c)` in `$VISUAL`,
+`$EDITOR`, or `vi` when neither is set. Set the plugin's `editor` option to use a
+specific command, such as `code --wait`. OpenCode suspends its renderer while the
+editor runs and resumes afterward.
+
+After the editor exits successfully, the plugin validates the model mappings,
+retry budget, cooldown, HTTP statuses, error regexes, and notification setting.
+It reports every detected issue in a TUI toast. The JSONC file remains under your
+control; the plugin does not rewrite it.
 
 Fallback switches preserve the current reasoning variant when the target model
 supports it. Unsupported variants are omitted instead of causing a model error.
@@ -97,6 +100,7 @@ supports it. Unsupported variants are omitted instead of causing a model error.
 - `cooldown_seconds`: how long a failed original model remains on fallback. Defaults to `3600`.
 - `max_fallback_attempts`: maximum fallback switches in one turn. Defaults to `5`, allowing two full attempts through a three-model circular route before stopping.
 - `notify_on_fallback`: log fallback/recovery notices. Defaults to `true`.
+- `editor`: external editor command for `/fallback-config`. Defaults to `$VISUAL`, `$EDITOR`, then `vi`; use a wait-compatible command such as `code --wait`.
 
 ## How it works
 

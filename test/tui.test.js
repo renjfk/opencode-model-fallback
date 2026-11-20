@@ -43,10 +43,8 @@ test("TUI keeps only the sidebar and fallback configuration command", async () =
   expect(slots[0].render).toBeTypeOf("function");
 
   const commands = layer().commands;
-  expect(commands).toHaveLength(2);
+  expect(commands).toHaveLength(1);
   expect(commands[0].slash.name).toBe("fallback-config");
-  expect(commands[1]).toMatchObject({ id: "model-fallback.dialog.close", bind: "escape" });
-  expect(commands[1].enabled()).toBe(false);
 
   await cleanup();
   expect(unsubscribe).toHaveBeenCalledOnce();
