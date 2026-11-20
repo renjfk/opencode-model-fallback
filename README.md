@@ -24,7 +24,7 @@ routes back to the original model after the cooldown expires.
 Install with OpenCode V2's plugin manager:
 
 ```bash
-opencode plugin add @kingychiu/opencode-model-fallback@1.2.1
+opencode plugin add @kingychiu/opencode-model-fallback@1.2.2
 ```
 
 This adds the package to `~/.config/opencode/opencode.json` or `opencode.jsonc`.
@@ -71,8 +71,8 @@ The sidebar shows rounded cards ordered by fallback priority:
 - `[Recent]` and relative-time tags on the latest model's priority card, plus its reasoning variant; and
 - a compact error row only for models with a recorded provider error.
 
-Mappings are always shown, including before any prompt has run; such models show
-`Used: never`. Activity is kept in server memory and resets
+Mappings are always shown, including before any prompt has run. Used rows are
+hidden for unused and currently recent models. Activity is kept in server memory and resets
 when the OpenCode service restarts; configured model cooldowns remain persisted
 through plugin storage.
 

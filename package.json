@@ -1,6 +1,6 @@
 {
   "name": "@kingychiu/opencode-model-fallback",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Mapped model fallback router with reasoning-variant preservation and a TUI activity dashboard for OpenCode V2.",
   "keywords": [
     "fallback",

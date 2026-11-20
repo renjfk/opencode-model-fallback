@@ -204,9 +204,8 @@ export default Plugin.define({
       const state = () => status()?.models?.[model];
       const recent = () => status()?.latest?.model === model;
       const usedLabel = () => {
-        if (!state()?.lastUsedAt) return "Used: never";
-        if (!recent()) return `Used: ${relativeTime(state().lastUsedAt)}`;
-        return undefined;
+        if (!state()?.lastUsedAt || recent()) return undefined;
+        return `Used: ${relativeTime(state().lastUsedAt)}`;
       };
       return card(
         [
