@@ -1,6 +1,6 @@
 import { Plugin } from "@opencode/plugin/tui";
 import { jsxDEV } from "@opentui/solid/jsx-dev-runtime";
-import { createSignal, For } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import { updateFallbackOptions } from "./lib/config-file.js";
 import { displayModel, errorLabel, fallbackRoutes, relativeTime } from "./lib/tui-state.js";
 import { ModelFallback } from "./rpc.js";
@@ -202,27 +202,38 @@ export default Plugin.define({
 
     function modelView(model, position) {
       const state = () => status()?.models?.[model];
+      const recent = () => status()?.latest?.model === model;
+      const usedLabel = () => {
+        if (!state()?.lastUsedAt) return "Used: never";
+        if (!recent()) return `Used: ${relativeTime(state().lastUsedAt)}`;
+        return undefined;
+      };
       return card(
         [
           text(
-            () => `PRIORITY ${position}${status()?.latest?.model === model ? " [Recent]" : ""}`,
+            () =>
+              `PRIORITY ${position}${
+                recent() ? ` [Recent] [${relativeTime(status().latest.at)}]` : ""
+              }`,
             context.theme.text.muted,
           ),
           text(() => displayModel(model, state()?.variant), context.theme.text.base),
-          text(
-            () =>
-              `Used: ${state()?.lastUsedAt ? relativeTime(state().lastUsedAt) : "never"}${
-                state()?.sessionID ? ` · ${state().sessionID}` : ""
-              }`,
-            context.theme.text.muted,
-          ),
-          text(
-            () =>
-              `${errorLabel(state()?.lastError)}${
-                state()?.lastError?.at ? ` · ${relativeTime(state().lastError.at)}` : ""
-              }`,
-            context.theme.text.muted,
-          ),
+          jsxDEV(Show, {
+            get when() {
+              return usedLabel();
+            },
+            children: (label) => text(() => label(), context.theme.text.muted),
+          }),
+          jsxDEV(Show, {
+            get when() {
+              return state()?.lastError;
+            },
+            children: (error) =>
+              text(
+                () => `${errorLabel(error())} · ${relativeTime(error().at)}`,
+                context.theme.text.muted,
+              ),
+          }),
         ],
         context.theme.text.muted,
       );
