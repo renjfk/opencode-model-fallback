@@ -24,7 +24,7 @@ routes back to the original model after the cooldown expires.
 Install with OpenCode V2's plugin manager:
 
 ```bash
-opencode plugin add @kingychiu/opencode-model-fallback@1.3.0
+opencode plugin add @kingychiu/opencode-model-fallback@1.4.0
 ```
 
 This adds the package to `~/.config/opencode/opencode.json` or `opencode.jsonc`.
@@ -79,10 +79,12 @@ hidden for unused and currently recent models. Activity is kept in server memory
 when the OpenCode service restarts; configured model cooldowns remain persisted
 through plugin storage.
 
-Run `/fallback-config` to add, edit, remove, or make routes circular using model
-pickers. Press Escape to close the configuration dialog. The editor updates only
-this plugin's options in the global `opencode.json(c)` and preserves unrelated
-settings and comments.
+Run `/fallback-config` to edit complete routes using model pickers. You can add,
+replace, reorder, or remove models by priority, explicitly toggle circular retry,
+create independent routes, and delete routes with confirmation. Destructive
+actions show the resulting model sequence before saving. Press Escape to close
+the configuration dialog. The editor updates only this plugin's options in the
+global `opencode.json(c)` and preserves unrelated settings and comments.
 
 Fallback switches preserve the current reasoning variant when the target model
 supports it. Unsupported variants are omitted instead of causing a model error.

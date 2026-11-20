@@ -2,6 +2,7 @@ import { Plugin } from "@opencode/plugin/tui";
 import { jsxDEV } from "@opentui/solid/jsx-dev-runtime";
 import { createSignal, For, Show } from "solid-js";
 import { updateFallbackOptions } from "./lib/config-file.js";
+import { moveModel, replaceRoute, routeEdges, routeIsCircular } from "./lib/route-editor.js";
 import {
   activatedRoutes as selectActivatedRoutes,
   displayModel,
@@ -80,10 +81,11 @@ export default Plugin.define({
       const location = context.location ?? context.data.location.default();
       const result = await context.data.location.model.list(location);
       const models = Array.isArray(result) ? result : (result?.data ?? []);
+      const excluded = new Set(Array.isArray(exclude) ? exclude : [exclude]);
       return models
         .filter((model) => model.enabled !== false && model.type === "chat")
         .map((model) => `${model.providerID}/${model.id}`)
-        .filter((model) => model !== exclude)
+        .filter((model) => !excluded.has(model))
         .sort()
         .map((model) => ({ title: model, value: model }));
     }
@@ -121,85 +123,162 @@ export default Plugin.define({
 
     async function configureDialog() {
       const mappings = { ...(status()?.mappings ?? context.options.mappings) };
-      const route = fallbackRoutes(mappings)[0] ?? [];
-      const circular = route.length > 1 && mappings[route.at(-1)] === route[0];
+      const routes = fallbackRoutes(mappings);
+      const allModels = [...new Set(routes.flat())];
+
+      async function createRoute() {
+        const primary = await chooseModel("New route · primary model", allModels);
+        if (!primary) return;
+        const fallback = await chooseModel("New route · first fallback", [...allModels, primary]);
+        if (!fallback) return;
+        await saveOptions({ mappings: { ...mappings, ...routeEdges([primary, fallback], false) } });
+      }
+
+      if (!routes.length) {
+        await createRoute();
+        return;
+      }
+
+      const selected = context.ui.model.current();
+      const selectedModel = selected ? `${selected.providerID}/${selected.modelID}` : undefined;
+      const currentRoute = Math.max(
+        0,
+        routes.findIndex((route) => route.includes(selectedModel)),
+      );
+      const routeIndex =
+        routes.length === 1
+          ? 0
+          : Number(
+              await context.ui.dialog.select({
+                title: "Fallback route to edit",
+                current: String(currentRoute),
+                options: routes.map((route, index) => ({
+                  title: `Route ${index + 1} · ${route.length} models`,
+                  value: String(index),
+                  description: route.join(" → "),
+                })),
+              }),
+            );
+      if (!Number.isInteger(routeIndex) || !routes[routeIndex]) return;
+      const route = routes[routeIndex];
+      const circular = routeIsCircular(mappings, route);
       const action = await context.ui.dialog.select({
-        title: "Fallback configuration",
+        title: `Edit Route ${routeIndex + 1}`,
+        current: "add",
         options: [
-          { title: "Add mapping", value: "add", description: "Select a source and fallback model" },
           {
-            title: "Edit mapping",
-            value: "edit",
-            description: "Change a mapping's fallback model",
-            disabled: !Object.keys(mappings).length,
+            title: "Add model",
+            value: "add",
+            description: "Append a model at the lowest priority",
           },
           {
-            title: "Remove mapping",
+            title: "Reorder priority",
+            value: "move",
+            description: "Move a model earlier or later in the retry order",
+          },
+          {
+            title: "Replace model",
+            value: "replace",
+            description: "Swap one model without changing the other positions",
+          },
+          {
+            title: "Remove model",
             value: "remove",
-            description: "Remove a source-to-fallback edge",
-            disabled: !Object.keys(mappings).length,
+            description: "Remove a model and reconnect the remaining route",
           },
           {
-            title: circular ? "Break circular route" : "Make route circular",
+            title: `Circular retry: ${circular ? "on" : "off"}`,
             value: "circular",
-            description: route.length ? route.join(" → ") : "Add a mapping first",
-            disabled: route.length < 2,
+            description: circular
+              ? `Turn off the final retry back to ${route[0]}`
+              : `Turn on a final retry from ${route.at(-1)} to ${route[0]}`,
           },
+          {
+            title: "Create another route",
+            value: "create",
+            description: "Start an independent primary/fallback route",
+          },
+          { title: "Delete this route", value: "delete", description: route.join(" → ") },
         ],
       });
       if (!action) return;
 
+      if (action === "create") {
+        await createRoute();
+        return;
+      }
       if (action === "add") {
-        const source = await chooseModel("Fallback source model");
-        if (!source) return;
-        const target = await chooseModel(`Fallback for ${source}`, source);
-        if (!target) return;
-        mappings[source] = target;
-        await saveOptions({ mappings });
+        const model = await chooseModel("Model to add at lowest priority", route);
+        if (!model) return;
+        await saveOptions({ mappings: replaceRoute(mappings, route, [...route, model], circular) });
         return;
       }
-
-      if (action === "edit") {
-        const source = await context.ui.dialog.select({
-          title: "Mapping to edit",
-          options: Object.entries(mappings).map(([model, target]) => ({
-            title: model,
-            value: model,
-            description: `Current fallback: ${target}`,
-          })),
-        });
-        if (!source) return;
-        const target = await chooseModel(`New fallback for ${source}`, source);
-        if (!target) return;
-        mappings[source] = target;
-        await saveOptions({ mappings });
-        return;
-      }
-
-      if (action === "remove") {
-        const source = await context.ui.dialog.select({
-          title: "Mapping to remove",
-          options: Object.entries(mappings).map(([model, target]) => ({
-            title: model,
-            value: model,
-            description: `Fallback: ${target}`,
-          })),
-        });
-        if (!source) return;
-        const confirmed = await context.ui.dialog.confirm({
-          title: "Remove fallback mapping",
-          message: `${source} → ${mappings[source]}`,
-        });
-        if (!confirmed) return;
-        delete mappings[source];
-        await saveOptions({ mappings });
-        return;
-      }
-
       if (action === "circular") {
-        if (circular) delete mappings[route.at(-1)];
-        else mappings[route.at(-1)] = route[0];
-        await saveOptions({ mappings });
+        await saveOptions({ mappings: replaceRoute(mappings, route, route, !circular) });
+        return;
+      }
+      if (action === "delete") {
+        const confirmed = await context.ui.dialog.confirm({
+          title: "Delete fallback route",
+          message: route.join(" → "),
+          label: { confirm: "Delete route" },
+        });
+        if (confirmed) await saveOptions({ mappings: replaceRoute(mappings, route, [], false) });
+        return;
+      }
+
+      const model = await context.ui.dialog.select({
+        title: `Select model in Route ${routeIndex + 1}`,
+        options: route.map((item, index) => ({
+          title: `${index + 1}. ${item}`,
+          value: item,
+          description:
+            index === route.length - 1 ? "Lowest priority" : `Falls back to ${route[index + 1]}`,
+        })),
+      });
+      if (!model) return;
+
+      if (action === "move") {
+        const priority = await context.ui.dialog.select({
+          title: `New priority for ${model}`,
+          options: route.map((item, index) => ({
+            title: `Priority ${index + 1}`,
+            value: String(index + 1),
+            description: item === model ? "Current position" : `Currently ${item}`,
+          })),
+        });
+        if (!priority) return;
+        await saveOptions({
+          mappings: replaceRoute(
+            mappings,
+            route,
+            moveModel(route, model, Number(priority)),
+            circular,
+          ),
+        });
+        return;
+      }
+      if (action === "replace") {
+        const replacement = await chooseModel(
+          `Replacement for ${model}`,
+          route.filter((item) => item !== model),
+        );
+        if (!replacement) return;
+        const next = route.map((item) => (item === model ? replacement : item));
+        await saveOptions({ mappings: replaceRoute(mappings, route, next, circular) });
+        return;
+      }
+      if (action === "remove") {
+        const next = route.filter((item) => item !== model);
+        const confirmed = await context.ui.dialog.confirm({
+          title: `Remove ${model}`,
+          message: next.length
+            ? `New route: ${next.join(" → ")}`
+            : "This removes the entire route.",
+          label: { confirm: "Remove model" },
+        });
+        if (confirmed)
+          await saveOptions({ mappings: replaceRoute(mappings, route, next, circular) });
       }
     }
 
