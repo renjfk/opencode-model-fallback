@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 import { OpenCode } from "@opencode/client";
+import { ModelFallback } from "../rpc.js";
 
 // End-to-end: a real `opencode serve` process with this plugin loaded, a mock
 // OpenAI-compatible provider that rejects the original model with 429 and
@@ -273,6 +274,11 @@ describe.skipIf(!run)("e2e: fallback against a real opencode server", { timeout:
 
     // The route change was logged (the V2 replacement for V1 toasts).
     expect(state.server.output()).toMatch(/\[model-fallback\]/);
+
+    const activity = state.client.rpc(ModelFallback);
+    const status = await activity.status({}, { location: { directory: repoRoot } });
+    expect(status.latest).toMatchObject({ model: "mock/fallback", sessionID: session.id });
+    expect(status.models["mock/original"].lastError).toMatchObject({ status: 429 });
   });
 
   test("the cooldown routes later sessions to the fallback without touching the original", async () => {

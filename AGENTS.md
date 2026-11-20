@@ -6,7 +6,10 @@ only document constraints and rules an agent would get wrong without being told.
 ## Architecture
 
 Server plugin exported from `index.js` via `Plugin.define` (`@opencode/plugin`)
-with logic split into `lib/`.
+with logic split into `lib/`. The TUI is exported from `tui.js` via
+`@opencode/plugin/tui`; it calls the shared `rpc.js` contract for recent usage
+and error state. The TUI uses `@opentui/solid/jsx-dev-runtime` directly to keep
+the package as plain ESM without a build step.
 
 ## Key invariants
 
