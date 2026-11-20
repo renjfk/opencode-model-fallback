@@ -1,6 +1,12 @@
 import { describe, expect, test } from "vitest";
 
-import { displayModel, errorLabel, fallbackRoutes, relativeTime } from "../lib/tui-state.js";
+import {
+  activatedRoutes,
+  displayModel,
+  errorLabel,
+  fallbackRoutes,
+  relativeTime,
+} from "../lib/tui-state.js";
 
 describe("fallbackRoutes", () => {
   test("flattens chained mappings in priority order", () => {
@@ -29,6 +35,16 @@ describe("fallbackRoutes", () => {
     expect(fallbackRoutes({ "a/one": undefined })).toEqual([]);
     expect(fallbackRoutes(undefined)).toEqual([]);
   });
+});
+
+test("selects only routes containing the current model", () => {
+  const routes = [
+    ["kimi/k3", "go/kimi-k3"],
+    ["openai/gpt", "anthropic/claude"],
+  ];
+  expect(activatedRoutes(routes, "go/kimi-k3")).toEqual([routes[0]]);
+  expect(activatedRoutes(routes, "opencode-go/deepseek")).toEqual([]);
+  expect(activatedRoutes(routes, undefined)).toEqual([]);
 });
 
 test("formats model variants and recent errors for the TUI", () => {

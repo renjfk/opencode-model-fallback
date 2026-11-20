@@ -2,7 +2,13 @@ import { Plugin } from "@opencode/plugin/tui";
 import { jsxDEV } from "@opentui/solid/jsx-dev-runtime";
 import { createSignal, For, Show } from "solid-js";
 import { updateFallbackOptions } from "./lib/config-file.js";
-import { displayModel, errorLabel, fallbackRoutes, relativeTime } from "./lib/tui-state.js";
+import {
+  activatedRoutes as selectActivatedRoutes,
+  displayModel,
+  errorLabel,
+  fallbackRoutes,
+  relativeTime,
+} from "./lib/tui-state.js";
 import { ModelFallback } from "./rpc.js";
 
 function box(children) {
@@ -50,6 +56,12 @@ export default Plugin.define({
     const [loadError, setLoadError] = createSignal();
     const [configuring, setConfiguring] = createSignal(false);
     const routes = () => fallbackRoutes(status()?.mappings ?? context.options.mappings);
+    const activatedRoutes = () => {
+      const selected = context.ui.model.current();
+      if (!selected) return [];
+      const model = `${selected.providerID}/${selected.modelID}`;
+      return selectActivatedRoutes(routes(), model);
+    };
     const rpc = context.client.rpc(ModelFallback);
 
     async function refresh() {
@@ -241,27 +253,31 @@ export default Plugin.define({
     function sidebarView() {
       return box([
         text("Model fallback", context.theme.text.base),
-        text(
-          () =>
-            loadError() ??
-            (routes().length ? "Mappings in priority order" : "No mappings configured"),
-          context.theme.text.muted,
-        ),
+        jsxDEV(Show, {
+          get when() {
+            return (
+              loadError() ??
+              (!routes().length
+                ? "No mappings configured"
+                : activatedRoutes().length
+                  ? undefined
+                  : "No activated fallback route")
+            );
+          },
+          children: (notice) => text(() => notice(), context.theme.text.muted),
+        }),
         jsxDEV(
           For,
           {
             get each() {
-              return routes();
+              return activatedRoutes();
             },
             children: (route, routeIndex) =>
-              box([
-                text(`ROUTE ${routeIndex() + 1} · highest priority first`, context.theme.text.base),
-                jsxDEV(For, {
-                  each: route,
-                  children: (model, modelIndex) =>
-                    modelView(model, `${routeIndex() + 1}.${modelIndex() + 1}`),
-                }),
-              ]),
+              jsxDEV(For, {
+                each: route,
+                children: (model, modelIndex) =>
+                  modelView(model, `${routeIndex() + 1}.${modelIndex() + 1}`),
+              }),
           },
           undefined,
           true,
