@@ -51,7 +51,6 @@ export default Plugin.define({
     const [configuring, setConfiguring] = createSignal(false);
     const routes = () => fallbackRoutes(status()?.mappings ?? context.options.mappings);
     const rpc = context.client.rpc(ModelFallback);
-    let returnRoute;
 
     async function refresh() {
       try {
@@ -229,7 +228,7 @@ export default Plugin.define({
       );
     }
 
-    function dashboardView() {
+    function sidebarView() {
       return box([
         text("Model fallback", context.theme.text.base),
         text(
@@ -260,25 +259,9 @@ export default Plugin.define({
       ]);
     }
 
-    function dashboardRoute() {
-      return dashboardView();
-    }
-
     context.keymap.layer(() => ({
       mode: "global",
       commands: [
-        {
-          id: "model-fallback.dashboard",
-          title: "Show model fallback status",
-          group: "Models",
-          palette: true,
-          slash: { name: "fallback", aliases: ["model-fallback"] },
-          run: async () => {
-            returnRoute = context.ui.router.current();
-            await refresh();
-            context.ui.router.navigate({ type: "plugin", name: "fallback" });
-          },
-        },
         {
           id: "model-fallback.configure",
           title: "Configure model fallback routes",
@@ -288,59 +271,22 @@ export default Plugin.define({
           run: configure,
         },
         {
-          id: "model-fallback.dashboard.edit",
-          title: "Edit fallback configuration",
-          bind: "c",
-          enabled: () => {
-            const route = context.ui.router.current();
-            return !configuring() && route?.type === "plugin" && route?.name === "fallback";
-          },
-          run: configure,
-        },
-        {
           id: "model-fallback.dialog.close",
           bind: "escape",
           enabled: configuring,
           run: () => context.ui.dialog.clear(),
         },
-        {
-          id: "model-fallback.dashboard.close",
-          title: "Close model fallback status",
-          bind: "escape",
-          enabled: () => {
-            const route = context.ui.router.current();
-            return !configuring() && route?.type === "plugin" && route?.name === "fallback";
-          },
-          run: () => context.ui.router.navigate(returnRoute ?? { type: "home" }),
-        },
       ],
     }));
 
-    const unregisterRoute = context.ui.router.register({
-      name: "fallback",
-      render: dashboardRoute,
-    });
     const unregisterSidebar = context.ui.slot({
       append: "sidebar.content",
-      render: dashboardView,
-    });
-    const unregisterFooter = context.ui.slot({
-      append: "home.footer.status",
-      render: () =>
-        text(
-          () =>
-            status()?.latest
-              ? `Fallback · ${displayModel(status().latest.model, status().latest.variant)}`
-              : "Fallback ready",
-          context.theme.text.base,
-        ),
+      render: sidebarView,
     });
 
     return () => {
       unsubscribe();
-      unregisterRoute();
       unregisterSidebar();
-      unregisterFooter();
     };
   },
 });

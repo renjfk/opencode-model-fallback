@@ -2,8 +2,7 @@ import { expect, test, vi } from "vitest";
 
 import TuiPlugin from "../tui.js";
 
-test("TUI registers the fallback dashboard and recent-model footer", async () => {
-  const routes = new Map();
+test("TUI keeps only the sidebar and fallback configuration command", async () => {
   const slots = [];
   let layer;
   const unsubscribe = vi.fn();
@@ -30,14 +29,7 @@ test("TUI registers the fallback dashboard and recent-model footer", async () =>
       }),
     },
     ui: {
-      router: {
-        current: vi.fn(() => ({ type: "home" })),
-        register: vi.fn((route) => {
-          routes.set(route.name, route);
-          return vi.fn();
-        }),
-        navigate: vi.fn(),
-      },
+      dialog: { clear: vi.fn() },
       slot: vi.fn((slot) => {
         slots.push(slot);
         return vi.fn();
@@ -46,24 +38,15 @@ test("TUI registers the fallback dashboard and recent-model footer", async () =>
   };
 
   const cleanup = await TuiPlugin.setup(context);
-  const dashboard = routes.get("fallback");
-  expect(dashboard).toBeDefined();
-  expect(dashboard.render).toBeTypeOf("function");
-  expect(slots.find((slot) => slot.append === "sidebar.content")?.render).toBeTypeOf("function");
-  expect(slots.find((slot) => slot.append === "home.footer.status")?.render).toBeTypeOf("function");
+  expect(slots).toHaveLength(1);
+  expect(slots[0].append).toBe("sidebar.content");
+  expect(slots[0].render).toBeTypeOf("function");
 
   const commands = layer().commands;
-  expect(commands[0].slash.name).toBe("fallback");
-  expect(commands[1].slash.name).toBe("fallback-config");
-  await commands[0].run();
-  expect(context.ui.router.navigate).toHaveBeenCalledWith({ type: "plugin", name: "fallback" });
-
-  const close = commands.find((command) => command.id === "model-fallback.dashboard.close");
-  expect(close.enabled()).toBe(false);
-  context.ui.router.current.mockReturnValue({ type: "plugin", name: "fallback" });
-  expect(close.enabled()).toBe(true);
-  close.run();
-  expect(context.ui.router.navigate).toHaveBeenLastCalledWith({ type: "home" });
+  expect(commands).toHaveLength(2);
+  expect(commands[0].slash.name).toBe("fallback-config");
+  expect(commands[1]).toMatchObject({ id: "model-fallback.dialog.close", bind: "escape" });
+  expect(commands[1].enabled()).toBe(false);
 
   await cleanup();
   expect(unsubscribe).toHaveBeenCalledOnce();
