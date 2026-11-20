@@ -9,6 +9,25 @@ function box(children) {
   return jsxDEV("box", { flexDirection: "column", flexShrink: 0, children }, undefined, true);
 }
 
+function card(children, color) {
+  return jsxDEV(
+    "box",
+    {
+      flexDirection: "column",
+      flexShrink: 0,
+      border: true,
+      borderStyle: "rounded",
+      borderColor: color,
+      paddingLeft: 1,
+      paddingRight: 1,
+      marginBottom: 1,
+      children,
+    },
+    undefined,
+    true,
+  );
+}
+
 function text(value, color) {
   return jsxDEV(
     "text",
@@ -29,7 +48,8 @@ export default Plugin.define({
   async setup(context) {
     const [status, setStatus] = createSignal();
     const [loadError, setLoadError] = createSignal();
-    const routes = fallbackRoutes(context.options.mappings);
+    const [configuring, setConfiguring] = createSignal(false);
+    const routes = () => fallbackRoutes(status()?.mappings ?? context.options.mappings);
     const rpc = context.client.rpc(ModelFallback);
     let returnRoute;
 
@@ -94,8 +114,8 @@ export default Plugin.define({
       }
     }
 
-    async function configure() {
-      const mappings = { ...context.options.mappings };
+    async function configureDialog() {
+      const mappings = { ...(status()?.mappings ?? context.options.mappings) };
       const route = fallbackRoutes(mappings)[0] ?? [];
       const circular = route.length > 1 && mappings[route.at(-1)] === route[0];
       const action = await context.ui.dialog.select({
@@ -178,28 +198,38 @@ export default Plugin.define({
       }
     }
 
+    async function configure() {
+      setConfiguring(true);
+      try {
+        await configureDialog();
+      } finally {
+        setConfiguring(false);
+      }
+    }
+
     function modelView(model, position) {
       const state = () => status()?.models?.[model];
-      return box([
-        text(
-          () => `${position}. ${displayModel(model, state()?.variant)}`,
-          context.theme.text.base,
-        ),
-        text(
-          () =>
-            `   Used: ${state()?.lastUsedAt ? relativeTime(state().lastUsedAt) : "never"}${
-              state()?.sessionID ? ` · ${state().sessionID}` : ""
-            }`,
-          context.theme.text.muted,
-        ),
-        text(
-          () =>
-            `   Error: ${errorLabel(state()?.lastError)}${
-              state()?.lastError?.at ? ` · ${relativeTime(state().lastError.at)}` : ""
-            }`,
-          context.theme.text.muted,
-        ),
-      ]);
+      return card(
+        [
+          text(() => `PRIORITY ${position}`, context.theme.text.muted),
+          text(() => displayModel(model, state()?.variant), context.theme.text.base),
+          text(
+            () =>
+              `Used: ${state()?.lastUsedAt ? relativeTime(state().lastUsedAt) : "never"}${
+                state()?.sessionID ? ` · ${state().sessionID}` : ""
+              }`,
+            context.theme.text.muted,
+          ),
+          text(
+            () =>
+              `${errorLabel(state()?.lastError)}${
+                state()?.lastError?.at ? ` · ${relativeTime(state().lastError.at)}` : ""
+              }`,
+            context.theme.text.muted,
+          ),
+        ],
+        context.theme.text.muted,
+      );
     }
 
     function dashboardView() {
@@ -209,16 +239,18 @@ export default Plugin.define({
         text(
           () =>
             loadError() ??
-            (routes.length ? "Mappings in priority order" : "No mappings configured"),
+            (routes().length ? "Mappings in priority order" : "No mappings configured"),
           context.theme.text.muted,
         ),
         jsxDEV(
           For,
           {
-            each: routes,
+            get each() {
+              return routes();
+            },
             children: (route, routeIndex) =>
               box([
-                text(`Route ${routeIndex() + 1}: ${route.join(" → ")}`, context.theme.text.base),
+                text(`ROUTE ${routeIndex() + 1} · highest priority first`, context.theme.text.base),
                 jsxDEV(For, {
                   each: route,
                   children: (model, modelIndex) =>
@@ -237,23 +269,6 @@ export default Plugin.define({
     }
 
     function dashboardRoute() {
-      context.keymap.layer(() => ({
-        mode: "global",
-        commands: [
-          {
-            id: "model-fallback.dashboard.edit",
-            title: "Edit fallback configuration",
-            bind: "c",
-            run: configure,
-          },
-          {
-            id: "model-fallback.dashboard.close",
-            title: "Close model fallback status",
-            bind: "escape",
-            run: () => context.ui.router.navigate(returnRoute ?? { type: "home" }),
-          },
-        ],
-      }));
       return dashboardView();
     }
 
@@ -279,6 +294,32 @@ export default Plugin.define({
           palette: true,
           slash: { name: "fallback-config" },
           run: configure,
+        },
+        {
+          id: "model-fallback.dashboard.edit",
+          title: "Edit fallback configuration",
+          bind: "c",
+          enabled: () => {
+            const route = context.ui.router.current();
+            return !configuring() && route?.type === "plugin" && route?.name === "fallback";
+          },
+          run: configure,
+        },
+        {
+          id: "model-fallback.dialog.close",
+          bind: "escape",
+          enabled: configuring,
+          run: () => context.ui.dialog.clear(),
+        },
+        {
+          id: "model-fallback.dashboard.close",
+          title: "Close model fallback status",
+          bind: "escape",
+          enabled: () => {
+            const route = context.ui.router.current();
+            return !configuring() && route?.type === "plugin" && route?.name === "fallback";
+          },
+          run: () => context.ui.router.navigate(returnRoute ?? { type: "home" }),
         },
       ],
     }));

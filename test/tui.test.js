@@ -58,6 +58,13 @@ test("TUI registers the fallback dashboard and recent-model footer", async () =>
   await commands[0].run();
   expect(context.ui.router.navigate).toHaveBeenCalledWith({ type: "plugin", name: "fallback" });
 
+  const close = commands.find((command) => command.id === "model-fallback.dashboard.close");
+  expect(close.enabled()).toBe(false);
+  context.ui.router.current.mockReturnValue({ type: "plugin", name: "fallback" });
+  expect(close.enabled()).toBe(true);
+  close.run();
+  expect(context.ui.router.navigate).toHaveBeenLastCalledWith({ type: "home" });
+
   await cleanup();
   expect(unsubscribe).toHaveBeenCalledOnce();
 });

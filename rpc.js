@@ -41,8 +41,9 @@ const status = {
   properties: {
     latest,
     models: { type: "object", additionalProperties: model },
+    mappings: { type: "object", additionalProperties: { type: "string" } },
   },
-  required: ["models"],
+  required: ["models", "mappings"],
   additionalProperties: false,
 };
 

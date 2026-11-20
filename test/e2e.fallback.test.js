@@ -279,6 +279,7 @@ describe.skipIf(!run)("e2e: fallback against a real opencode server", { timeout:
     const status = await activity.status({}, { location: { directory: repoRoot } });
     expect(status.latest).toMatchObject({ model: "mock/fallback", sessionID: session.id });
     expect(status.models["mock/original"].lastError).toMatchObject({ status: 429 });
+    expect(status.mappings).toEqual({ "mock/original": "mock/fallback" });
   });
 
   test("the cooldown routes later sessions to the fallback without touching the original", async () => {
