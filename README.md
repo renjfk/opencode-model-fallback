@@ -1,7 +1,7 @@
-[![CI](https://github.com/kingychiu/opencode-model-fallback/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kingychiu/opencode-model-fallback/actions/workflows/ci.yml)
+[![CI](https://github.com/renjfk/opencode-model-fallback/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/renjfk/opencode-model-fallback/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![npm](https://img.shields.io/npm/v/@kingychiu/opencode-model-fallback)](https://www.npmjs.com/package/@kingychiu/opencode-model-fallback)
-[![Downloads](https://img.shields.io/npm/dm/@kingychiu/opencode-model-fallback)](https://www.npmjs.com/package/@kingychiu/opencode-model-fallback)
+[![npm](https://img.shields.io/npm/v/@renjfk/opencode-model-fallback)](https://www.npmjs.com/package/@renjfk/opencode-model-fallback)
+[![Downloads](https://img.shields.io/npm/dm/@renjfk/opencode-model-fallback)](https://www.npmjs.com/package/@renjfk/opencode-model-fallback)
 
 # opencode-model-fallback
 
@@ -24,7 +24,7 @@ routes back to the original model after the cooldown expires.
 Install with OpenCode V2's plugin manager:
 
 ```bash
-opencode plugin add @kingychiu/opencode-model-fallback@1.5.0
+opencode plugin add @renjfk/opencode-model-fallback
 ```
 
 This adds the package to `~/.config/opencode/opencode.json` or `opencode.jsonc`.
@@ -40,7 +40,7 @@ If OpenCode keeps using an older published version of the plugin after an
 update, clear the cached package and restart OpenCode:
 
 ```bash
-rm -rf ~/.cache/opencode/npm/@kingychiu/
+rm -rf ~/.cache/opencode/npm/@renjfk/
 ```
 
 ## Configuration
@@ -51,7 +51,7 @@ If you want to set plugin options, add them to the entry:
 {
   "plugins": [
     {
-      "package": "@kingychiu/opencode-model-fallback",
+      "package": "@renjfk/opencode-model-fallback",
       "options": {
         "mappings": {
           "openai/gpt-5.4": "azure-ai-foundry/gpt-5.4",
@@ -228,7 +228,7 @@ Use the provider `statusCode` and response body text to tune the retry rules:
 {
   "plugins": [
     {
-      "package": "@kingychiu/opencode-model-fallback",
+      "package": "@renjfk/opencode-model-fallback",
       "options": {
         "retry_on_errors": [429, 403],
         "retryable_error_patterns": ["rate.?limit", "usage.?limit"],

@@ -8,7 +8,7 @@ import { readFallbackConfig, validateFallbackSource } from "../lib/config-file.j
 const valid = JSON.stringify({
   plugins: [
     {
-      package: "@kingychiu/opencode-model-fallback@1.5.0",
+      package: "@renjfk/opencode-model-fallback",
       options: {
         mappings: {
           "kimi/k3": "go/kimi-k3",
