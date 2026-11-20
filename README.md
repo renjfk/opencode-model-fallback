@@ -24,7 +24,7 @@ routes back to the original model after the cooldown expires.
 Install with OpenCode V2's plugin manager:
 
 ```bash
-opencode plugin add @kingychiu/opencode-model-fallback@1.1.2
+opencode plugin add @kingychiu/opencode-model-fallback@1.1.3
 ```
 
 This adds the package to `~/.config/opencode/opencode.json` or `opencode.jsonc`.
@@ -70,7 +70,7 @@ Escape to return to the previous route. The same dashboard is also available in
 the sidebar as rounded cards ordered by fallback priority. It shows:
 
 - mapping routes in configured priority order, including chained fallbacks;
-- the most recently used model, session, reasoning variant, and relative time; and
+- a `[Recent]` tag on the latest model's priority card, plus session, reasoning variant, and relative time; and
 - the latest provider error recorded for every model in a mapping.
 
 A compact recent-model indicator is also added to the home footer. Mappings are

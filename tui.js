@@ -65,12 +65,6 @@ export default Plugin.define({
     const unsubscribe = rpc.events.on("updated", (event) => setStatus(event.data));
     await refresh();
 
-    function recentLabel() {
-      const latest = status()?.latest;
-      if (!latest) return "Recent: no mapped model used yet";
-      return `Recent: ${displayModel(latest.model, latest.variant)} · ${relativeTime(latest.at)}`;
-    }
-
     async function modelOptions(exclude) {
       const location = context.location ?? context.data.location.default();
       const result = await context.data.location.model.list(location);
@@ -211,7 +205,10 @@ export default Plugin.define({
       const state = () => status()?.models?.[model];
       return card(
         [
-          text(() => `PRIORITY ${position}`, context.theme.text.muted),
+          text(
+            () => `PRIORITY ${position}${status()?.latest?.model === model ? " [Recent]" : ""}`,
+            context.theme.text.muted,
+          ),
           text(() => displayModel(model, state()?.variant), context.theme.text.base),
           text(
             () =>
@@ -235,7 +232,6 @@ export default Plugin.define({
     function dashboardView() {
       return box([
         text("Model fallback", context.theme.text.base),
-        text(recentLabel, context.theme.text.base),
         text(
           () =>
             loadError() ??
@@ -260,10 +256,6 @@ export default Plugin.define({
           },
           undefined,
           true,
-        ),
-        text(
-          "c edits config · Esc returns · activity is held in server memory",
-          context.theme.text.muted,
         ),
       ]);
     }
