@@ -25,8 +25,10 @@ the package as plain ESM without a build step.
   the switch must happen before the request is built.
 - Global model cooldowns are persisted with the V2 `ctx.storage` domain (already
   namespaced per plugin id); do not add per-session fallback state.
-- Configuration is read from plugin `ctx.options`; do not add dotfile-based
-  config reads.
+- Configuration is read from plugin `ctx.options`. The TUI editor writes only
+  this plugin's options in the global `opencode.json(c)` through
+  `lib/config-file.js`, preserving unrelated settings and comments; do not add
+  a separate dotfile-based configuration source.
 - No build step. Plain ESM JavaScript, shipped as-is.
 
 ## Scripts

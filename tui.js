@@ -1,11 +1,12 @@
 import { Plugin } from "@opencode/plugin/tui";
 import { jsxDEV } from "@opentui/solid/jsx-dev-runtime";
 import { createSignal, For } from "solid-js";
+import { updateFallbackOptions } from "./lib/config-file.js";
 import { displayModel, errorLabel, fallbackRoutes, relativeTime } from "./lib/tui-state.js";
 import { ModelFallback } from "./rpc.js";
 
 function box(children) {
-  return jsxDEV("box", { flexDirection: "column", children }, undefined, true);
+  return jsxDEV("box", { flexDirection: "column", flexShrink: 0, children }, undefined, true);
 }
 
 function text(value, color) {
@@ -30,6 +31,7 @@ export default Plugin.define({
     const [loadError, setLoadError] = createSignal();
     const routes = fallbackRoutes(context.options.mappings);
     const rpc = context.client.rpc(ModelFallback);
+    let returnRoute;
 
     async function refresh() {
       try {
@@ -47,6 +49,133 @@ export default Plugin.define({
       const latest = status()?.latest;
       if (!latest) return "Recent: no mapped model used yet";
       return `Recent: ${displayModel(latest.model, latest.variant)} · ${relativeTime(latest.at)}`;
+    }
+
+    async function modelOptions(exclude) {
+      const location = context.location ?? context.data.location.default();
+      const result = await context.data.location.model.list(location);
+      const models = Array.isArray(result) ? result : (result?.data ?? []);
+      return models
+        .filter((model) => model.enabled !== false && model.type === "chat")
+        .map((model) => `${model.providerID}/${model.id}`)
+        .filter((model) => model !== exclude)
+        .sort()
+        .map((model) => ({ title: model, value: model }));
+    }
+
+    async function chooseModel(title, exclude) {
+      const options = await modelOptions(exclude);
+      if (!options.length) {
+        context.ui.toast.show({ message: "No available models found", variant: "error" });
+        return undefined;
+      }
+      return context.ui.dialog.select({
+        title,
+        options,
+        search: (query, items) =>
+          items.filter((item) => item.value.toLowerCase().includes(query.toLowerCase())),
+      });
+    }
+
+    async function saveOptions(patch) {
+      try {
+        const file = await updateFallbackOptions(patch);
+        context.ui.toast.show({
+          title: "Fallback configuration saved",
+          message: file,
+          variant: "success",
+        });
+      } catch (error) {
+        context.ui.toast.show({
+          title: "Could not save fallback configuration",
+          message: error instanceof Error ? error.message : "Configuration update failed",
+          variant: "error",
+        });
+      }
+    }
+
+    async function configure() {
+      const mappings = { ...context.options.mappings };
+      const route = fallbackRoutes(mappings)[0] ?? [];
+      const circular = route.length > 1 && mappings[route.at(-1)] === route[0];
+      const action = await context.ui.dialog.select({
+        title: "Fallback configuration",
+        options: [
+          { title: "Add mapping", value: "add", description: "Select a source and fallback model" },
+          {
+            title: "Edit mapping",
+            value: "edit",
+            description: "Change a mapping's fallback model",
+            disabled: !Object.keys(mappings).length,
+          },
+          {
+            title: "Remove mapping",
+            value: "remove",
+            description: "Remove a source-to-fallback edge",
+            disabled: !Object.keys(mappings).length,
+          },
+          {
+            title: circular ? "Break circular route" : "Make route circular",
+            value: "circular",
+            description: route.length ? route.join(" → ") : "Add a mapping first",
+            disabled: route.length < 2,
+          },
+        ],
+      });
+      if (!action) return;
+
+      if (action === "add") {
+        const source = await chooseModel("Fallback source model");
+        if (!source) return;
+        const target = await chooseModel(`Fallback for ${source}`, source);
+        if (!target) return;
+        mappings[source] = target;
+        await saveOptions({ mappings });
+        return;
+      }
+
+      if (action === "edit") {
+        const source = await context.ui.dialog.select({
+          title: "Mapping to edit",
+          options: Object.entries(mappings).map(([model, target]) => ({
+            title: model,
+            value: model,
+            description: `Current fallback: ${target}`,
+          })),
+        });
+        if (!source) return;
+        const target = await chooseModel(`New fallback for ${source}`, source);
+        if (!target) return;
+        mappings[source] = target;
+        await saveOptions({ mappings });
+        return;
+      }
+
+      if (action === "remove") {
+        const source = await context.ui.dialog.select({
+          title: "Mapping to remove",
+          options: Object.entries(mappings).map(([model, target]) => ({
+            title: model,
+            value: model,
+            description: `Fallback: ${target}`,
+          })),
+        });
+        if (!source) return;
+        const confirmed = await context.ui.dialog.confirm({
+          title: "Remove fallback mapping",
+          message: `${source} → ${mappings[source]}`,
+        });
+        if (!confirmed) return;
+        delete mappings[source];
+        await saveOptions({ mappings });
+        return;
+      }
+
+      if (action === "circular") {
+        if (circular) delete mappings[route.at(-1)];
+        else mappings[route.at(-1)] = route[0];
+        await saveOptions({ mappings });
+      }
     }
 
     function modelView(model, position) {
@@ -73,7 +202,7 @@ export default Plugin.define({
       ]);
     }
 
-    function dashboard() {
+    function dashboardView() {
       return box([
         text("Model fallback", context.theme.text.base),
         text(recentLabel, context.theme.text.base),
@@ -100,8 +229,32 @@ export default Plugin.define({
           undefined,
           true,
         ),
-        text("/fallback to reopen · errors are held in server memory", context.theme.text.muted),
+        text(
+          "c edits config · Esc returns · activity is held in server memory",
+          context.theme.text.muted,
+        ),
       ]);
+    }
+
+    function dashboardRoute() {
+      context.keymap.layer(() => ({
+        mode: "global",
+        commands: [
+          {
+            id: "model-fallback.dashboard.edit",
+            title: "Edit fallback configuration",
+            bind: "c",
+            run: configure,
+          },
+          {
+            id: "model-fallback.dashboard.close",
+            title: "Close model fallback status",
+            bind: "escape",
+            run: () => context.ui.router.navigate(returnRoute ?? { type: "home" }),
+          },
+        ],
+      }));
+      return dashboardView();
     }
 
     context.keymap.layer(() => ({
@@ -114,16 +267,29 @@ export default Plugin.define({
           palette: true,
           slash: { name: "fallback", aliases: ["model-fallback"] },
           run: async () => {
+            returnRoute = context.ui.router.current();
             await refresh();
             context.ui.router.navigate({ type: "plugin", name: "fallback" });
           },
+        },
+        {
+          id: "model-fallback.configure",
+          title: "Configure model fallback routes",
+          group: "Models",
+          palette: true,
+          slash: { name: "fallback-config" },
+          run: configure,
         },
       ],
     }));
 
     const unregisterRoute = context.ui.router.register({
       name: "fallback",
-      render: dashboard,
+      render: dashboardRoute,
+    });
+    const unregisterSidebar = context.ui.slot({
+      append: "sidebar.content",
+      render: dashboardView,
     });
     const unregisterFooter = context.ui.slot({
       append: "home.footer.status",
@@ -140,6 +306,7 @@ export default Plugin.define({
     return () => {
       unsubscribe();
       unregisterRoute();
+      unregisterSidebar();
       unregisterFooter();
     };
   },

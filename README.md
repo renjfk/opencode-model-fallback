@@ -24,7 +24,7 @@ routes back to the original model after the cooldown expires.
 Install with OpenCode V2's plugin manager:
 
 ```bash
-opencode plugin add @kingychiu/opencode-model-fallback@1.1.0
+opencode plugin add @kingychiu/opencode-model-fallback@1.1.1
 ```
 
 This adds the package to `~/.config/opencode/opencode.json` or `opencode.jsonc`.
@@ -65,15 +65,24 @@ If you want to set plugin options, add them to the entry:
 
 ## TUI dashboard
 
-Run `/fallback` (or `/model-fallback`) to open the TUI dashboard. It shows:
+Run `/fallback` (or `/model-fallback`) to open the TUI dashboard, then press
+Escape to return to the previous route. The same dashboard is also available in
+the sidebar. It shows:
 
 - mapping routes in configured priority order, including chained fallbacks;
 - the most recently used model, session, reasoning variant, and relative time; and
 - the latest provider error recorded for every model in a mapping.
 
-A compact recent-model indicator is also added to the home footer. Activity is
-kept in server memory and resets when the OpenCode service restarts; configured
-model cooldowns remain persisted through plugin storage.
+A compact recent-model indicator is also added to the home footer. Mappings are
+always shown, including before any prompt has run; such models show `Used: never`
+and `no recent errors`. Activity is kept in server memory and resets when the
+OpenCode service restarts; configured model cooldowns remain persisted through
+plugin storage.
+
+Run `/fallback-config`, or press `c` in the dashboard, to add, edit, remove, or
+make routes circular using model pickers. The editor updates only this plugin's
+options in the global `opencode.json(c)` and preserves unrelated settings and
+comments.
 
 Fallback switches preserve the current reasoning variant when the target model
 supports it. Unsupported variants are omitted instead of causing a model error.
