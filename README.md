@@ -10,9 +10,9 @@ Mapped model fallback router for [OpenCode](https://opencode.ai/).
 There are situations where you may want to use the quota that comes with a
 subscription first, then fall back to an API pay-as-you-go model only when that
 subscription-backed model is rate-limited or usage-limited. You can solve that
-with a local proxy, but maintaining a proxy server is often not worth it if all
-you need is a simple one-to-one fallback inside OpenCode. This plugin handles
-that routing directly in OpenCode.
+with a local proxy, but maintaining a proxy server is often not worth it for
+simple fallback routing inside OpenCode. This plugin handles that routing
+directly in OpenCode, including chained and circular fallback routes.
 
 When a configured model hits a retryable provider failure, this plugin switches
 the session to the mapped fallback model, forces an immediate retry of the failed
@@ -21,13 +21,14 @@ routes back to the original model after the cooldown expires.
 
 ## Install
 
-Add to your OpenCode V2 config at `~/.config/opencode/opencode.json`:
+Install with OpenCode V2's plugin manager:
 
-```json
-{
-  "plugins": [{ "package": "@renjfk/opencode-model-fallback" }]
-}
+```bash
+opencode plugin add @renjfk/opencode-model-fallback
 ```
+
+This adds the package to `~/.config/opencode/opencode.json` or `opencode.jsonc`.
+Both its server and TUI parts load automatically.
 
 `package` may be an npm package name or an absolute path to a local plugin
 directory (the directory resolves its server entry through `package.json`
@@ -39,7 +40,7 @@ If OpenCode keeps using an older published version of the plugin after an
 update, clear the cached package and restart OpenCode:
 
 ```bash
-rm -rf ~/.cache/opencode/packages/@renjfk/
+rm -rf ~/.cache/opencode/npm/@renjfk/
 ```
 
 ## Configuration
@@ -62,13 +63,44 @@ If you want to set plugin options, add them to the entry:
 }
 ```
 
+## TUI sidebar and configuration
+
+The sidebar shows only the activated route containing the current session's
+selected model, using rounded cards ordered by fallback priority. Unrelated
+routes are hidden, and the cards update automatically when fallback switches
+models. Each route shows:
+
+- mapping routes in configured priority order, including chained fallbacks;
+- `[Recent]` and relative-time tags on the latest model's priority card, plus its reasoning variant; and
+- a compact error row only for models with a recorded provider error.
+
+Mappings are always shown, including before any prompt has run. Used rows are
+hidden for unused and currently recent models. Activity is kept in server memory and resets
+when the OpenCode service restarts; configured model cooldowns remain persisted
+through plugin storage.
+
+Run `/fallback-config` to open the global `opencode.json(c)` in `$VISUAL`,
+`$EDITOR`, or `vi` when neither is set. Set the plugin's `editor` option to use a
+specific command, such as `code --wait`. OpenCode suspends its renderer while the
+editor runs and resumes afterward.
+
+After the editor exits successfully, the plugin validates the model mappings,
+retry budget, cooldown, HTTP statuses, error regexes, and notification setting.
+It reports every detected issue in a TUI toast. The JSONC file remains under your
+control; the plugin does not rewrite it.
+
+Fallback switches preserve the current reasoning variant when the target model
+supports it. Unsupported variants are omitted instead of causing a model error.
+
 ## Options
 
 - `mappings`: map original model IDs to fallback model IDs.
 - `retry_on_errors`: retryable HTTP status codes. Defaults to `429`.
 - `retryable_error_patterns`: retryable error message patterns. Defaults to `["rate.?limit"]`.
 - `cooldown_seconds`: how long a failed original model remains on fallback. Defaults to `3600`.
+- `max_fallback_attempts`: maximum fallback switches in one turn. Defaults to `5`, allowing two full attempts through a three-model circular route before stopping.
 - `notify_on_fallback`: log fallback/recovery notices. Defaults to `true`.
+- `editor`: external editor command for `/fallback-config`. Defaults to `$VISUAL`, `$EDITOR`, then `vi`; use a wait-compatible command such as `code --wait`.
 
 ## How it works
 
@@ -84,8 +116,11 @@ Global model cooldowns are persisted with OpenCode's plugin storage
 sessions avoid immediately retrying a model that has just failed. When the
 cooldown expires, mapped requests are routed back to the original model.
 
-The plugin does not load balance, race models, or retry through a chain. Each
-mapping is one original model to one fallback model.
+The plugin does not load balance or race models. Each mapping is one original
+model to one fallback model; chained mappings such as `A -> B` and `B -> C`
+continue through the next mapping when a fallback also fails. Add `C -> A` to
+make the route circular. Circular routes stop after `max_fallback_attempts`
+(default `5`), producing `A -> B -> C -> A -> B -> C -> stop`.
 
 ## Scenarios
 

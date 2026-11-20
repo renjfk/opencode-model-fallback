@@ -6,7 +6,10 @@ only document constraints and rules an agent would get wrong without being told.
 ## Architecture
 
 Server plugin exported from `index.js` via `Plugin.define` (`@opencode/plugin`)
-with logic split into `lib/`.
+with logic split into `lib/`. The TUI is exported from `tui.js` via
+`@opencode/plugin/tui`; it calls the shared `rpc.js` contract for recent usage
+and error state. The TUI uses `@opentui/solid/jsx-dev-runtime` directly to keep
+the package as plain ESM without a build step.
 
 ## Key invariants
 
@@ -22,8 +25,9 @@ with logic split into `lib/`.
   the switch must happen before the request is built.
 - Global model cooldowns are persisted with the V2 `ctx.storage` domain (already
   namespaced per plugin id); do not add per-session fallback state.
-- Configuration is read from plugin `ctx.options`; do not add dotfile-based
-  config reads.
+- Configuration is read from plugin `ctx.options`. `/fallback-config` opens the
+  global `opencode.json(c)` in an external editor and validates the saved source
+  through `lib/config-file.js`; do not add a separate configuration source.
 - No build step. Plain ESM JavaScript, shipped as-is.
 
 ## Scripts
